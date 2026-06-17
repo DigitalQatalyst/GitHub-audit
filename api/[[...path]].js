@@ -17,9 +17,17 @@ function json(res, status, data) {
 }
 
 function getRoute(req) {
+  // Primary: parse from URL (most reliable on Vercel)
+  const url = (req.url || '').split('?')[0];
+  if (url.startsWith('/api/')) return url.slice(5).replace(/\/$/, '');
+  if (url === '/api') return '';
+
+  // Fallback: catch-all query param
   const segments = req.query.path;
-  if (!segments) return '';
-  return Array.isArray(segments) ? segments.join('/') : String(segments);
+  if (segments) {
+    return Array.isArray(segments) ? segments.join('/') : String(segments);
+  }
+  return '';
 }
 
 function loadHandlers() {
