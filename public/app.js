@@ -89,6 +89,10 @@ async function loadConfig() {
     note.textContent = 'PAT is not saved. Enter a token above, or add PAT in Vercel Environment Variables.';
     note.className = 'pat-note';
   }
+
+  if (cfg.cronDescription) {
+    note.textContent += ` · Auto-scan: ${cfg.cronDescription}`;
+  }
 }
 
 async function tryLoadExistingScan() {
@@ -108,9 +112,15 @@ function buildMeta(scan) {
   if (!scan) return '';
   const parts = [];
   if (scan.completedAt) parts.push(`Last scan: ${formatDate(scan.completedAt)}`);
-  if (scan.rateLimitRemaining != null) parts.push(`Rate remaining: ${scan.rateLimitRemaining}`);
+  if (scan.summary?.visibleRepos != null) parts.push(`${scan.summary.visibleRepos} active repos scanned`);
+  if (scan.summary?.totalDiscovered) parts.push(`${scan.summary.totalDiscovered} discovered`);
   if (scan.summary?.archivedSkipped) parts.push(`${scan.summary.archivedSkipped} archived excluded`);
+  if (scan.rateLimitRemaining != null) parts.push(`Rate remaining: ${scan.rateLimitRemaining}`);
   return parts.join(' · ');
+}
+
+function repoUrl(repo) {
+  return repo.url || `https://github.com/${repo.fullName}`;
 }
 
 function renderDashboard(scan) {
@@ -145,7 +155,18 @@ function renderDashboard(scan) {
 
   renderHealthBars(s);
   renderOwners(scan.owners || []);
+  populateOwnerFilter(scan.owners || []);
   renderRepoTable(scan.repositories || []);
+}
+
+function populateOwnerFilter(owners) {
+  const sel = $('#owner-filter');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All owners</option>' + owners.map((o) =>
+    `<option value="${escapeHtml(o.name)}">${escapeHtml(o.name)} (${o.count})</option>`
+  ).join('');
+  if (current) sel.value = current;
 }
 
 function renderHealthBars(s) {
@@ -175,9 +196,11 @@ function renderOwners(owners) {
 function renderRepoTable(repos) {
   const search = ($('#repo-search')?.value || '').toLowerCase();
   const healthFilter = $('#health-filter')?.value || '';
+  const ownerFilter = $('#owner-filter')?.value || '';
 
   const filtered = repos.filter((r) => {
     if (healthFilter && r.health !== healthFilter) return false;
+    if (ownerFilter && r.owner !== ownerFilter) return false;
     if (search && !r.fullName.toLowerCase().includes(search)) return false;
     return true;
   });
@@ -185,7 +208,8 @@ function renderRepoTable(repos) {
   $('#repo-tbody').innerHTML = filtered.map((r) => `
     <tr data-repo="${r.fullName}">
       <td>
-        <div class="repo-name" data-action="detail">${r.fullName}</div>
+        <a class="repo-link" href="${escapeHtml(repoUrl(r))}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.fullName)} ↗</a>
+        <button type="button" class="repo-detail-btn" data-action="detail">What needs attention</button>
         <div class="repo-meta">${r.visibility} / ${r.defaultBranch}</div>
       </td>
       <td><span class="health-badge ${r.health}">${r.healthLabel}</span></td>
@@ -227,7 +251,8 @@ function renderActions(actions, fullName) {
 function bindTableEvents(repos) {
   const tbody = $('#repo-tbody');
   tbody.querySelectorAll('[data-action="detail"]').forEach((el) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
       const repo = el.closest('tr').dataset.repo;
       showRepoDetail(repos.find((r) => r.fullName === repo));
     });
@@ -239,11 +264,13 @@ function bindTableEvents(repos) {
 
 function showRepoDetail(repo) {
   if (!repo) return;
+  const url = repoUrl(repo);
   $('#modal-title').textContent = repo.fullName;
   $('#modal-summary').textContent = repo.summary || '';
 
   $('#modal-risks').innerHTML = `
     <div class="modal-section">
+      <a class="modal-repo-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(repo.fullName)} on GitHub ↗</a>
       <h3>What needs attention</h3>
       <ul class="risk-detail-list">${(repo.risks || []).map((r) => `
         <li>
@@ -333,6 +360,9 @@ async function init() {
     if (currentScan) renderRepoTable(currentScan.repositories);
   });
   $('#health-filter').addEventListener('change', () => {
+    if (currentScan) renderRepoTable(currentScan.repositories);
+  });
+  $('#owner-filter')?.addEventListener('change', () => {
     if (currentScan) renderRepoTable(currentScan.repositories);
   });
   $('#modal-close').addEventListener('click', () => $('#detail-modal').classList.add('hidden'));

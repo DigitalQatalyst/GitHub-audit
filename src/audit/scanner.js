@@ -53,6 +53,7 @@ async function runAudit(options) {
 
   const repos = await fetchAllRepositories(octokit, accountFilter, scope, progress);
   const archivedSkipped = repos.archivedSkipped || 0;
+  const totalDiscovered = repos.totalDiscovered || 0;
   const repoList = repos.list;
   progress('Found repositories', `${repoList.length} active repos to scan (archived excluded)`);
   const repositories = [];
@@ -108,6 +109,8 @@ async function runAudit(options) {
     rateLimitRemaining: finalRate.data.resources.core.remaining,
     summary: {
       visibleRepos: repositories.length,
+      totalDiscovered,
+      archivedSkipped,
       critical,
       warning,
       healthy,
@@ -230,6 +233,7 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
     fullName,
     name,
     owner,
+    url: repoMeta.html_url || `https://github.com/${owner}/${name}`,
     visibility: repoMeta.private ? 'private' : 'public',
     defaultBranch,
     health,
@@ -292,21 +296,14 @@ function hasAssignedReviewers(pr) {
 }
 
 /**
- * Fetch all repositories accessible to the PAT (org + collaborator + personal).
+ * Fetch all repositories accessible to the PAT (org inventory + collaborator access).
+ * Archived repos are excluded from the returned list but counted in stats.
  */
 async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
   const repoMap = new Map();
 
-  progress('Fetching repositories', 'All accessible (public + private)');
-  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-    per_page: 100,
-    affiliation: 'owner,collaborator,organization_member',
-    sort: 'pushed',
-  });
-  for (const r of allAccessible) repoMap.set(r.full_name, r);
-
+  // 1. Full org inventory when filter is set (primary source for ~30 org repos)
   if (accountFilter) {
-    progress('Fetching repositories', `Org/user: ${accountFilter}`);
     try {
       const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
         org: accountFilter,
@@ -314,7 +311,9 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
         type: scope === 'public' ? 'public' : 'all',
       });
       for (const r of orgRepos) repoMap.set(r.full_name, r);
-    } catch {
+      progress('Org inventory', `${orgRepos.length} repos from ${accountFilter}`);
+    } catch (err) {
+      progress('Org fetch', `Could not list org repos: ${err.message}`);
       try {
         const userRepos = await octokit.paginate(octokit.repos.listForUser, {
           username: accountFilter,
@@ -322,22 +321,34 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
           type: scope === 'public' ? 'public' : 'all',
         });
         for (const r of userRepos) repoMap.set(r.full_name, r);
-      } catch { /* filter not found — use all accessible only */ }
+      } catch { /* fall through to PAT list */ }
     }
   }
 
+  // 2. All repos the PAT can access (collaborator, personal, org member)
+  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+    per_page: 100,
+    affiliation: 'owner,collaborator,organization_member',
+    sort: 'updated',
+  });
+  for (const r of allAccessible) repoMap.set(r.full_name, r);
+  progress('PAT accessible', `${allAccessible.length} repos via token`);
+
+  const totalDiscovered = repoMap.size;
   const allRepos = [...repoMap.values()];
   const archivedSkipped = allRepos.filter((r) => r.archived).length;
-  let repos = allRepos.filter((r) => !r.archived);
+  let list = allRepos.filter((r) => !r.archived);
 
-  if (scope === 'private') repos = repos.filter((r) => r.private);
-  if (scope === 'public') repos = repos.filter((r) => !r.private);
+  if (scope === 'private') list = list.filter((r) => r.private);
+  if (scope === 'public') list = list.filter((r) => !r.private);
 
   if (archivedSkipped > 0) {
     progress('Excluded archived', `${archivedSkipped} archived repos skipped`);
   }
 
-  return { list: repos, archivedSkipped };
+  progress('Ready to scan', `${list.length} active repos (${totalDiscovered} total discovered)`);
+
+  return { list, archivedSkipped, totalDiscovered };
 }
 
 function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h, health) {

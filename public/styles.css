@@ -272,6 +272,42 @@ body {
 .repo-table tbody tr:hover { background: #f8fafc; }
 .repo-table tbody tr:last-child td { border-bottom: none; }
 
+.repo-link {
+  font-weight: 700;
+  color: var(--primary);
+  font-size: 0.82rem;
+  text-decoration: none;
+  display: inline-block;
+}
+.repo-link:hover { text-decoration: underline; }
+
+.repo-detail-btn {
+  display: block;
+  margin-top: 0.2rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.repo-detail-btn:hover { color: var(--primary); }
+
+.modal-repo-link {
+  display: inline-block;
+  margin-bottom: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.modal-repo-link:hover { background: #dbeafe; }
+
 .repo-name { font-weight: 700; color: var(--primary); cursor: pointer; font-size: 0.82rem; }
 .repo-name:hover { text-decoration: underline; }
 .repo-meta { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.1rem; }
