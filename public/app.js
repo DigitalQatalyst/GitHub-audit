@@ -82,17 +82,11 @@ async function loadConfig() {
   if (cfg.defaultMode) $('#mode').value = cfg.defaultMode;
 
   const note = $('#pat-note');
-  if (cfg.hasServerPat) {
-    note.textContent = 'PAT is saved on server — you can refresh without entering a token.';
-    note.className = 'pat-note pat-saved';
-  } else {
-    note.textContent = 'PAT is not saved. Enter a token above, or add PAT in Vercel Environment Variables.';
-    note.className = 'pat-note';
-  }
-
-  if (cfg.cronDescription) {
-    note.textContent += ` · Auto-scan: ${cfg.cronDescription}`;
-  }
+  const parts = [];
+  if (cfg.cronDescription) parts.push(`Auto-scan: ${cfg.cronDescription}`);
+  parts.push('Scans all non-archived DigitalQatalyst repos (same as archived:false on GitHub)');
+  note.textContent = parts.join(' · ');
+  note.className = 'pat-note pat-saved';
 }
 
 async function tryLoadExistingScan() {
@@ -208,7 +202,7 @@ function renderRepoTable(repos) {
   $('#repo-tbody').innerHTML = filtered.map((r) => `
     <tr data-repo="${r.fullName}">
       <td>
-        <a class="repo-link" href="${escapeHtml(repoUrl(r))}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.fullName)} ↗</a>
+        <a class="repo-link" href="${escapeHtml(repoUrl(r))}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.fullName)}</a>
         <button type="button" class="repo-detail-btn" data-action="detail">What needs attention</button>
         <div class="repo-meta">${r.visibility} / ${r.defaultBranch}</div>
       </td>
@@ -270,7 +264,7 @@ function showRepoDetail(repo) {
 
   $('#modal-risks').innerHTML = `
     <div class="modal-section">
-      <a class="modal-repo-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(repo.fullName)} on GitHub ↗</a>
+      <a class="modal-repo-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(repo.fullName)} on GitHub</a>
       <h3>What needs attention</h3>
       <ul class="risk-detail-list">${(repo.risks || []).map((r) => `
         <li>
@@ -314,19 +308,18 @@ async function handleAction(actionId, repo) {
 }
 
 async function startScan() {
-  const pat = $('#pat').value.trim();
   const accountFilter = $('#account').value.trim();
   const scope = $('#scope').value;
   const mode = $('#mode').value;
 
   $('#btn-refresh').disabled = true;
-  setStatus('running', 'Scanning repositories — this may take 1–3 minutes…', '');
-  showLoading(true, 'Fetching repos, commits, branches, and pull requests…');
+  setStatus('running', 'Scanning all non-archived DigitalQatalyst repos…', '');
+  showLoading(true, 'Fetching repos matching org:DigitalQatalyst archived:false…');
 
   try {
     const scan = await api('/scan', {
       method: 'POST',
-      body: JSON.stringify({ pat: pat || undefined, accountFilter, scope, mode }),
+      body: JSON.stringify({ accountFilter, scope, mode }),
     });
 
     currentScan = scan;
@@ -374,7 +367,7 @@ async function init() {
   try {
     await loadConfig();
   } catch {
-    $('#pat-note').textContent = 'PAT is not saved. Enter a token to scan, or add PAT in Vercel Environment Variables.';
+    $('#pat-note').textContent = 'Scans all non-archived DigitalQatalyst repos';
   }
 
   // Restore cached or server scan without blocking UI

@@ -296,68 +296,75 @@ function hasAssignedReviewers(pr) {
 }
 
 /**
- * Fetch repositories for the audit.
- * When accountFilter is set (e.g. DigitalQatalyst), only that org/user's repos are included.
- * Archived repos are excluded from the scan but counted in stats.
+ * Fetch repositories using GitHub search (matches org UI filter archived:false).
  */
 async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
   const repoMap = new Map();
   const filter = (accountFilter || process.env.AUDIT_ACCOUNT_FILTER || '').trim();
 
   if (filter) {
-    progress('Fetching repositories', `Org only: ${filter}`);
+    let q = `org:${filter} archived:false`;
+    if (scope === 'private') q += ' is:private';
+    else if (scope === 'public') q += ' is:public';
+
+    progress('Fetching repositories', `Search: ${q}`);
+
     try {
+      let page = 1;
+      let totalCount = 0;
+      while (true) {
+        const { data } = await octokit.search.repos({ q, per_page: 100, page });
+        totalCount = data.total_count;
+        for (const r of data.items) {
+          if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
+            repoMap.set(r.full_name, r);
+          }
+        }
+        if (repoMap.size >= totalCount || data.items.length < 100) break;
+        page += 1;
+      }
+      progress('Org inventory', `${repoMap.size} non-archived repos (GitHub reports ${totalCount})`);
+    } catch (err) {
+      progress('Search failed', `Falling back to org list: ${err.message}`);
       const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
         org: filter,
         per_page: 100,
         type: scope === 'public' ? 'public' : 'all',
       });
       for (const r of orgRepos) {
-        if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
+        if (!r.archived && r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
           repoMap.set(r.full_name, r);
         }
       }
-      progress('Org inventory', `${repoMap.size} repos from ${filter}`);
-    } catch (err) {
-      progress('Org fetch', `Could not list org: ${err.message}`);
-      try {
-        const userRepos = await octokit.paginate(octokit.repos.listForUser, {
-          username: filter,
-          per_page: 100,
-          type: scope === 'public' ? 'public' : 'all',
-        });
-        for (const r of userRepos) {
-          if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
-            repoMap.set(r.full_name, r);
-          }
-        }
-      } catch { /* no repos found */ }
     }
-  } else {
-    progress('Fetching repositories', 'All accessible via PAT');
-    const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-      per_page: 100,
-      affiliation: 'owner,collaborator,organization_member',
-      sort: 'updated',
-    });
-    for (const r of allAccessible) repoMap.set(r.full_name, r);
+
+    let archivedSkipped = 0;
+    try {
+      const { data } = await octokit.search.repos({
+        q: `org:${filter} archived:true`,
+        per_page: 1,
+      });
+      archivedSkipped = data.total_count;
+    } catch { /* optional metadata */ }
+
+    const list = [...repoMap.values()];
+    progress('Ready to scan', `${list.length} active ${filter} repos`);
+
+    return { list, archivedSkipped, totalDiscovered: list.length + archivedSkipped };
   }
 
-  const totalDiscovered = repoMap.size;
-  const allRepos = [...repoMap.values()];
-  const archivedSkipped = allRepos.filter((r) => r.archived).length;
-  let list = allRepos.filter((r) => !r.archived);
-
-  if (scope === 'private') list = list.filter((r) => r.private);
-  if (scope === 'public') list = list.filter((r) => !r.private);
-
-  if (archivedSkipped > 0) {
-    progress('Excluded archived', `${archivedSkipped} archived repos skipped`);
+  progress('Fetching repositories', 'All accessible via PAT');
+  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+    per_page: 100,
+    affiliation: 'owner,collaborator,organization_member',
+    sort: 'updated',
+  });
+  for (const r of allAccessible) {
+    if (!r.archived) repoMap.set(r.full_name, r);
   }
 
-  progress('Ready to scan', `${list.length} active ${filter || 'accessible'} repos`);
-
-  return { list, archivedSkipped, totalDiscovered };
+  const list = [...repoMap.values()];
+  return { list, archivedSkipped: 0, totalDiscovered: list.length };
 }
 
 function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h, health) {
