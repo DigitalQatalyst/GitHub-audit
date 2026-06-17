@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Governance Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-top">
+        <h1>GitHub Governance Dashboard</h1>
+        <p class="subtitle">Daily audit of repository activity, commit hygiene, branch naming, PR workflow, and branch protection</p>
+      </div>
+
+      <div class="config-bar">
+        <div class="config-field">
+          <label for="pat">GitHub PAT</label>
+          <input type="password" id="pat" placeholder="ghp_... or github_pat_..." autocomplete="off">
+        </div>
+        <div class="config-field">
+          <label for="account">Account filter</label>
+          <input type="text" id="account" placeholder="DigitalQatalyst">
+        </div>
+        <div class="config-field">
+          <label for="scope">Scope</label>
+          <select id="scope">
+            <option value="all">All accessible</option>
+            <option value="public">Public only</option>
+            <option value="private">Private only</option>
+          </select>
+        </div>
+        <div class="config-field">
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="fast">Fast routine</option>
+            <option value="thorough">Thorough</option>
+          </select>
+        </div>
+        <div class="config-field">
+          <label for="refresh-mode">Refresh</label>
+          <select id="refresh-mode">
+            <option value="manual">Manual</option>
+            <option value="auto">Auto (server cron)</option>
+          </select>
+        </div>
+        <div class="config-actions">
+          <button id="btn-refresh" class="btn btn-primary">Refresh</button>
+          <button id="btn-json" class="btn btn-secondary">JSON</button>
+          <button id="btn-csv" class="btn btn-secondary">CSV</button>
+        </div>
+      </div>
+
+      <div class="status-bar" id="status-bar">
+        <span class="badge badge-idle" id="status-badge">Idle</span>
+        <span id="status-text">Load or run a scan to view results</span>
+        <span class="status-meta" id="status-meta"></span>
+      </div>
+      <p class="pat-note" id="pat-note"></p>
+    </header>
+
+    <section class="org-summary hidden" id="org-summary">
+      <h2>Organisation Summary</h2>
+      <p class="assessment" id="org-assessment"></p>
+      <div class="findings-grid" id="org-findings"></div>
+    </section>
+
+    <section class="kpi-row hidden" id="kpi-section">
+      <div class="kpi-card"><span class="kpi-value" id="kpi-repos">—</span><span class="kpi-label">Visible Repos</span></div>
+      <div class="kpi-card critical"><span class="kpi-value" id="kpi-critical">—</span><span class="kpi-label">Critical</span></div>
+      <div class="kpi-card warning"><span class="kpi-value" id="kpi-warning">—</span><span class="kpi-label">Warning</span></div>
+      <div class="kpi-card healthy"><span class="kpi-value" id="kpi-healthy">—</span><span class="kpi-label">Healthy</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-stale">—</span><span class="kpi-label">Stale Repos</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-pr-risks">—</span><span class="kpi-label">Open PR Risks</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-naming">—</span><span class="kpi-label">Naming Violations</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-protection">—</span><span class="kpi-label">Protection Unknown</span></div>
+    </section>
+
+    <section class="charts-row hidden" id="charts-section">
+      <div class="chart-card">
+        <h3>Health Distribution</h3>
+        <div class="health-bars" id="health-bars"></div>
+      </div>
+      <div class="chart-card">
+        <h3>Visible Owners</h3>
+        <ul class="owner-list" id="owner-list"></ul>
+      </div>
+    </section>
+
+    <section class="table-section hidden" id="table-section">
+      <div class="table-toolbar">
+        <input type="search" id="repo-search" placeholder="Filter repositories...">
+        <select id="health-filter">
+          <option value="">All health</option>
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="healthy">Healthy</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table class="repo-table">
+          <thead>
+            <tr>
+              <th>Repository</th>
+              <th>Health</th>
+              <th>Activity</th>
+              <th>Commit Hygiene</th>
+              <th>Branches</th>
+              <th>PR Workflow</th>
+              <th>Protection</th>
+              <th>Docs</th>
+              <th>Risks</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="repo-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="modal hidden" id="detail-modal">
+      <div class="modal-content">
+        <button class="modal-close" id="modal-close">&times;</button>
+        <h2 id="modal-title"></h2>
+        <p id="modal-summary"></p>
+        <div id="modal-risks"></div>
+        <div id="modal-branches"></div>
+        <div id="modal-commits"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "github-audit-dashboard",
+  "version": "1.0.0",
+  "description": "Daily GitHub governance audit dashboard for repository activity, commit hygiene, branch naming, and PR workflow",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "audit:cli": "node src/cli.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@octokit/rest": "^21.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}

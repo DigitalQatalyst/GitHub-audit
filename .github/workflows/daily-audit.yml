@@ -1,0 +1,67 @@
+name: Daily GitHub Audit
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'GitHub org or user to audit'
+        required: false
+        default: 'DigitalQatalyst'
+      mode:
+        description: 'Scan mode (fast or thorough)'
+        required: false
+        default: 'fast'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run audit
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          AUDIT_ACCOUNT_FILTER: ${{ github.event.inputs.account || 'DigitalQatalyst' }}
+          DEFAULT_SCAN_MODE: ${{ github.event.inputs.mode || 'fast' }}
+          DATA_DIR: ./data
+        run: npm run audit:cli
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results-${{ github.run_number }}
+          path: data/
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          if [ -f data/latest.json ]; then
+            node -e "
+              const s = require('./data/latest.json').summary;
+              console.log('## GitHub Audit Summary');
+              console.log('| Metric | Count |');
+              console.log('|--------|-------|');
+              console.log('| Repositories |', s.visibleRepos, '|');
+              console.log('| Critical |', s.critical, '|');
+              console.log('| Warning |', s.warning, '|');
+              console.log('| Healthy |', s.healthy, '|');
+              console.log('| Naming violations |', s.namingViolations, '|');
+              console.log('| Open PR risks |', s.openPrRisks, '|');
+            " >> $GITHUB_STEP_SUMMARY
+          fi

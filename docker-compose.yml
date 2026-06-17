@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  github-audit:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    volumes:
+      - audit-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  audit-data:
