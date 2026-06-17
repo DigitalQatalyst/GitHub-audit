@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "api/[[...path]].js": {
+    "api/[...path].js": {
       "maxDuration": 300,
       "memory": 1024
     }

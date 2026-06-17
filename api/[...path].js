@@ -1,10 +1,9 @@
 /**
  * Single Vercel serverless handler for ALL /api/* routes.
- * One file avoids bundle crashes from duplicated heavy imports.
  */
 require('dotenv').config();
 
-const { getServerPat, getDataDir, isVercel } = require('../src/config');
+const { getServerPat, isVercel } = require('../src/config');
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,16 +16,10 @@ function json(res, status, data) {
 }
 
 function getRoute(req) {
-  // Primary: parse from URL (most reliable on Vercel)
   const url = (req.url || '').split('?')[0];
   if (url.startsWith('/api/')) return url.slice(5).replace(/\/$/, '');
-  if (url === '/api') return '';
-
-  // Fallback: catch-all query param
   const segments = req.query.path;
-  if (segments) {
-    return Array.isArray(segments) ? segments.join('/') : String(segments);
-  }
+  if (segments) return Array.isArray(segments) ? segments.join('/') : String(segments);
   return '';
 }
 
@@ -41,7 +34,6 @@ module.exports = async (req, res) => {
   const route = getRoute(req);
 
   try {
-    // ── Lightweight routes (no heavy imports) ──
     if (route === 'health' && req.method === 'GET') {
       return json(res, 200, { ok: true, hasPat: Boolean(getServerPat()), platform: isVercel() ? 'vercel' : 'node' });
     }
@@ -56,7 +48,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ── Routes that need handlers (lazy-loaded) ──
     const h = loadHandlers();
 
     if (route === 'status' && req.method === 'GET') {
