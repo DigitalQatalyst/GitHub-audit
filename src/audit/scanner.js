@@ -51,40 +51,8 @@ async function runAudit(options) {
   const { data: viewer } = await octokit.users.getAuthenticated();
   progress('Authenticated', viewer.login);
 
-  let repos = [];
-
-  if (accountFilter) {
-    progress('Fetching repositories', `Org/user: ${accountFilter}`);
-    try {
-      const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
-        org: accountFilter,
-        per_page: 100,
-        type: scope === 'public' ? 'public' : 'all',
-      });
-      repos = orgRepos;
-    } catch {
-      const userRepos = await octokit.paginate(octokit.repos.listForUser, {
-        username: accountFilter,
-        per_page: 100,
-        type: scope === 'public' ? 'public' : 'owner',
-      });
-      repos = userRepos;
-    }
-  } else {
-    progress('Fetching repositories', 'All accessible');
-    const authed = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-      per_page: 100,
-      affiliation: 'owner,collaborator,organization_member',
-    });
-    repos = authed;
-  }
-
-  if (scope === 'private') repos = repos.filter((r) => r.private);
-  if (scope === 'public') repos = repos.filter((r) => !r.private);
-
-  progress('Found repositories', `${repos.length} repos to scan`);
-
-  const rateLimit = await octokit.rateLimit.get();
+  const repos = await fetchAllRepositories(octokit, accountFilter, scope, progress);
+  progress('Found repositories', `${repos.length} repos to scan (public + private)`);
   const repositories = [];
   let namingViolations = 0;
   let openPrRisks = 0;
@@ -95,7 +63,8 @@ async function runAudit(options) {
     const [owner, name] = [repo.owner.login, repo.name];
     progress('Scanning', `${owner}/${name} (${i + 1}/${repos.length})`);
 
-    if (rateLimit.data.resources.core.remaining < 50) {
+    const rateCheck = await octokit.rateLimit.get();
+    if (rateCheck.data.resources.core.remaining < 50) {
       progress('Rate limit pause', 'Waiting for API quota');
       await sleep(60000);
     }
@@ -104,7 +73,7 @@ async function runAudit(options) {
     repositories.push(repoAudit);
 
     namingViolations += repoAudit.branches?.nonCompliant || 0;
-    openPrRisks += (repoAudit.prWorkflow?.risky || 0);
+    openPrRisks += repoAudit.prWorkflow?.atRisk || 0;
     if (repoAudit.protection?.unknown) protectionUnknown += repoAudit.protection.unknown;
 
     if (mode === 'fast' && i < repos.length - 1) {
@@ -211,11 +180,18 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
   const lastCommitter = commits[0]?.commit?.author?.name || commits[0]?.author?.login || '—';
 
   const stalledPrs = pullRequests.filter((pr) => {
-    const ageH = (Date.now() - new Date(pr.created_at).getTime()) / (1000 * 60 * 60);
-    return ageH > 24;
+    const lastActivity = new Date(pr.updated_at || pr.created_at).getTime();
+    const idleH = (Date.now() - lastActivity) / (1000 * 60 * 60);
+    return idleH > 24;
   });
 
-  const prsNoReviewers = pullRequests.filter((pr) => !pr.requested_reviewers?.length);
+  const prsNoReviewers = pullRequests.filter((pr) => !hasAssignedReviewers(pr));
+
+  const atRiskPrs = pullRequests.filter((pr) => {
+    const lastActivity = new Date(pr.updated_at || pr.created_at).getTime();
+    const idleH = (Date.now() - lastActivity) / (1000 * 60 * 60);
+    return idleH > 24 || !hasAssignedReviewers(pr);
+  });
 
   const protection = await checkProtection(octokit, owner, name, branches);
 
@@ -240,7 +216,7 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
   };
 
   const health = computeHealthStatus(metrics);
-  const risks = buildRisks(metrics, nonCompliantCount, hasContributing, vagueCommits, pullRequests);
+  const risks = buildRisks(metrics, nonCompliantCount, hasContributing, commits24h);
 
   const riskScore = risks.length + (health === 'critical' ? 10 : health === 'warning' ? 5 : 0);
 
@@ -280,7 +256,7 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
     branches: branchSummary,
     prWorkflow: {
       open: pullRequests.length,
-      risky: stalledPrs.length + prsNoReviewers.length,
+      atRisk: atRiskPrs.length,
       stalled: stalledPrs.length,
       noReviewers: prsNoReviewers.length,
       forceMerged: 0,
@@ -309,14 +285,64 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
   };
 }
 
-function buildRisks(metrics, nonCompliantCount, hasContributing, vagueCommits, pullRequests) {
+function hasAssignedReviewers(pr) {
+  const reviewers = pr.requested_reviewers?.length || 0;
+  const teams = pr.requested_teams?.length || 0;
+  const assignees = pr.assignees?.length || 0;
+  return reviewers + teams + assignees > 0;
+}
+
+/**
+ * Fetch all repositories accessible to the PAT (org + collaborator + personal).
+ */
+async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
+  const repoMap = new Map();
+
+  progress('Fetching repositories', 'All accessible (public + private)');
+  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+    per_page: 100,
+    affiliation: 'owner,collaborator,organization_member',
+    sort: 'pushed',
+  });
+  for (const r of allAccessible) repoMap.set(r.full_name, r);
+
+  if (accountFilter) {
+    progress('Fetching repositories', `Org/user: ${accountFilter}`);
+    try {
+      const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
+        org: accountFilter,
+        per_page: 100,
+        type: scope === 'public' ? 'public' : 'all',
+      });
+      for (const r of orgRepos) repoMap.set(r.full_name, r);
+    } catch {
+      try {
+        const userRepos = await octokit.paginate(octokit.repos.listForUser, {
+          username: accountFilter,
+          per_page: 100,
+          type: scope === 'public' ? 'public' : 'all',
+        });
+        for (const r of userRepos) repoMap.set(r.full_name, r);
+      } catch { /* filter not found — use all accessible only */ }
+    }
+  }
+
+  let repos = [...repoMap.values()];
+
+  if (scope === 'private') repos = repos.filter((r) => r.private);
+  if (scope === 'public') repos = repos.filter((r) => !r.private);
+
+  return repos;
+}
+
+function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h) {
   const risks = [];
 
-  if (metrics.commitsLast7d === 0 && metrics.daysSincePush <= 1) {
+  if (commits24h === 0 && metrics.totalCommits > 0 && (metrics.daysSincePush ?? 999) < 90) {
     risks.push(enrichRisk('no-commits-24h'));
   }
 
-  if (pullRequests.length > 0 && metrics.stalledPrs === pullRequests.length) {
+  if (metrics.openPrs > 0 && metrics.stalledPrs === metrics.openPrs) {
     risks.push(enrichRisk('no-pr-activity-48h'));
   }
 

@@ -8,12 +8,21 @@ let pollTimer = null;
 const $ = (sel) => document.querySelector(sel);
 
 async function api(path, options = {}) {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(`/api${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+  } catch {
+    throw new Error('Cannot reach the audit server. Run npm start and open the dashboard from that server.');
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    if (res.status === 404 && path !== '/scan/latest') {
+      throw new Error(err.error || 'API endpoint not found. Ensure the Node server is running (npm start).');
+    }
     throw new Error(err.error || `Request failed: ${res.status}`);
   }
   return res.json();
@@ -50,9 +59,9 @@ async function loadConfig() {
 
     const note = $('#pat-note');
     if (cfg.hasServerPat) {
-      note.textContent = 'Server PAT configured — you can refresh without entering a token.';
+      note.textContent = 'PAT is saved on server — you can refresh without entering a token.';
     } else {
-      note.textContent = 'PAT is not saved on server. Enter a token to scan, or configure GITHUB_PAT for shared access.';
+      note.textContent = 'PAT is not saved. Enter a token to scan, or configure the PAT secret on the server.';
     }
 
     if (cfg.cronEnabled) {
@@ -79,9 +88,13 @@ async function pollStatus() {
       clearTimeout(pollTimer);
     } else if (st.lastScan) {
       setStatus('complete', 'Last scan loaded', buildMeta(st.lastScan));
-      await loadLatestScan();
+      try { await loadLatestScan(); } catch { /* no results file yet */ }
+    } else {
+      setStatus('idle', 'Ready — click Refresh to start a scan', '');
     }
-  } catch { /* retry later */ }
+  } catch (err) {
+    setStatus('error', err.message, '');
+  }
 }
 
 function buildMeta(lastScan) {
@@ -90,12 +103,10 @@ function buildMeta(lastScan) {
 }
 
 async function loadLatestScan() {
-  try {
-    currentScan = await api('/scan/latest');
-    renderDashboard(currentScan);
-  } catch {
-    /* no data yet */
-  }
+  const scan = await api('/scan/latest');
+  if (!scan.repositories?.length) return;
+  currentScan = scan;
+  renderDashboard(currentScan);
 }
 
 function renderDashboard(scan) {

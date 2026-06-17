@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
  * CLI runner for scheduled / headless audits.
- * Usage: GITHUB_PAT=xxx node src/cli.js [--account DigitalQatalyst] [--mode fast]
+ * Usage: PAT=xxx node src/cli.js [--account DigitalQatalyst] [--mode fast]
  */
 require('dotenv').config();
 const { runAudit } = require('./audit/scanner');
 const { saveScan } = require('./audit/storage');
 const { buildOrganisationSummary } = require('./audit/descriptions');
+const { getServerPat } = require('./config');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -15,9 +16,9 @@ async function main() {
     return idx >= 0 && args[idx + 1] ? args[idx + 1] : fallback;
   };
 
-  const pat = process.env.GITHUB_PAT;
+  const pat = getServerPat();
   if (!pat) {
-    console.error('Error: GITHUB_PAT environment variable is required');
+    console.error('Error: PAT environment variable is required');
     process.exit(1);
   }
 

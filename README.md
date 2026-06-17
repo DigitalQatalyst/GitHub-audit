@@ -20,7 +20,7 @@ A daily audit dashboard for reviewing repository activity, commit hygiene, branc
 
 ```bash
 cp .env.example .env
-# Edit .env and set GITHUB_PAT
+# Edit .env and set PAT
 
 npm install
 npm start
@@ -32,7 +32,7 @@ Open http://localhost:3000
 
 ```bash
 cp .env.example .env
-# Set GITHUB_PAT, DASHBOARD_USER, DASHBOARD_PASSWORD
+# Set PAT, DASHBOARD_USER, DASHBOARD_PASSWORD
 
 docker compose up -d
 ```
@@ -43,7 +43,7 @@ The dashboard is available at http://localhost:3000 (or your deployed host). Tea
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GITHUB_PAT` | GitHub Personal Access Token | — |
+| `PAT` | GitHub Personal Access Token | — |
 | `AUDIT_ACCOUNT_FILTER` | Org or user to audit | `DigitalQatalyst` |
 | `PORT` | Server port | `3000` |
 | `DASHBOARD_USER` | Basic auth username (optional) | — |
@@ -65,11 +65,11 @@ For fine-grained tokens, grant repository access to all repos in the org with re
 
 ### Option 1: Server cron
 
-When `GITHUB_PAT` is set, the server runs a scheduled audit using `AUDIT_CRON` (default: 06:00 UTC daily). Results are saved to `DATA_DIR/latest.json`.
+When `PAT` is set, the server runs a scheduled audit using `AUDIT_CRON` (default: 06:00 UTC daily). Results are saved to `DATA_DIR/latest.json`.
 
 ### Option 2: GitHub Actions
 
-Add `GITHUB_PAT` as a repository secret, then the workflow in `.github/workflows/daily-audit.yml` runs daily and uploads results as artifacts.
+Add `PAT` as a repository secret, then the workflow in `.github/workflows/daily-audit.yml` runs daily and uploads results as artifacts.
 
 Manual trigger:
 
@@ -80,7 +80,7 @@ gh workflow run daily-audit.yml -f account=DigitalQatalyst -f mode=fast
 ### Option 3: CLI
 
 ```bash
-GITHUB_PAT=xxx npm run audit:cli -- --account DigitalQatalyst --mode fast
+PAT=xxx npm run audit:cli -- --account DigitalQatalyst --mode fast
 ```
 
 ## Dashboard usage
@@ -129,14 +129,14 @@ Checks `main`, `master`, `develop`, and `staging` for protection rules.
 For central team access:
 
 1. Deploy with Docker Compose on a shared server or cloud VM
-2. Set `GITHUB_PAT` in `.env` (never commit this file)
+2. Set `PAT` in `.env` (never commit this file)
 3. Enable `DASHBOARD_USER` and `DASHBOARD_PASSWORD` for basic auth
 4. Optionally put nginx or a load balancer with TLS in front
 5. Team members visit the URL — no individual PAT required
 
 ```bash
 # Production example
-GITHUB_PAT=ghp_xxx \
+PAT=ghp_xxx \
 DASHBOARD_USER=audit-team \
 DASHBOARD_PASSWORD=secure-password \
 AUDIT_ACCOUNT_FILTER=DigitalQatalyst \

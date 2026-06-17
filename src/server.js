@@ -6,10 +6,12 @@ const cron = require('node-cron');
 const { runAudit } = require('./audit/scanner');
 const { saveScan, loadLatestScan, listScanHistory } = require('./audit/storage');
 const { buildOrganisationSummary } = require('./audit/descriptions');
+const { getServerPat } = require('./config');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
+const PUBLIC_DIR = path.join(__dirname, '../public');
 
 let scanState = {
   status: 'idle',
@@ -42,21 +44,26 @@ function basicAuth(req, res, next) {
   next();
 }
 
-app.use('/api', basicAuth);
-app.use(express.static(path.join(__dirname, '../public')));
+// API routes MUST be registered before static file middleware
+const api = express.Router();
+api.use(basicAuth);
 
-app.get('/api/config', (req, res) => {
+api.get('/health', (req, res) => {
+  res.json({ ok: true, hasPat: Boolean(getServerPat()) });
+});
+
+api.get('/config', (req, res) => {
   res.json({
     accountFilter: process.env.AUDIT_ACCOUNT_FILTER || '',
     defaultMode: process.env.DEFAULT_SCAN_MODE || 'fast',
-    hasServerPat: Boolean(process.env.GITHUB_PAT),
+    hasServerPat: Boolean(getServerPat()),
     authEnabled: Boolean(process.env.DASHBOARD_USER && process.env.DASHBOARD_PASSWORD),
     cronEnabled: Boolean(scheduledJob),
     cronExpression: process.env.AUDIT_CRON || '0 6 * * *',
   });
 });
 
-app.get('/api/status', (req, res) => {
+api.get('/status', (req, res) => {
   const latest = loadLatestScan(DATA_DIR);
   res.json({
     ...scanState,
@@ -68,27 +75,29 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/api/scan/latest', (req, res) => {
+api.get('/scan/latest', (req, res) => {
   const latest = loadLatestScan(DATA_DIR);
-  if (!latest) return res.status(404).json({ error: 'No scan results yet' });
+  if (!latest) {
+    return res.json({ status: 'empty', repositories: [], summary: null, orgReport: null });
+  }
   const orgReport = buildOrganisationSummary(latest);
   res.json({ ...latest, orgReport });
 });
 
-app.get('/api/scan/history', (req, res) => {
+api.get('/scan/history', (req, res) => {
   res.json({ files: listScanHistory(DATA_DIR) });
 });
 
-app.get('/api/export/json', (req, res) => {
+api.get('/export/json', (req, res) => {
   const latest = loadLatestScan(DATA_DIR);
-  if (!latest) return res.status(404).json({ error: 'No scan results' });
+  if (!latest) return res.status(404).json({ error: 'No scan results yet. Run a scan first.' });
   res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
   res.json(latest);
 });
 
-app.get('/api/export/csv', (req, res) => {
+api.get('/export/csv', (req, res) => {
   const latest = loadLatestScan(DATA_DIR);
-  if (!latest) return res.status(404).json({ error: 'No scan results' });
+  if (!latest) return res.status(404).json({ error: 'No scan results yet. Run a scan first.' });
 
   const headers = [
     'Repository', 'Health', 'Visibility', 'Last Push', 'Commits 7d',
@@ -121,7 +130,7 @@ app.get('/api/export/csv', (req, res) => {
   res.send(csv);
 });
 
-app.post('/api/scan', async (req, res) => {
+api.post('/scan', async (req, res) => {
   if (scanState.status === 'running') {
     return res.status(409).json({ error: 'Scan already in progress' });
   }
@@ -133,9 +142,11 @@ app.post('/api/scan', async (req, res) => {
     mode = process.env.DEFAULT_SCAN_MODE || 'fast',
   } = req.body;
 
-  const pat = bodyPat || process.env.GITHUB_PAT;
+  const pat = bodyPat || getServerPat();
   if (!pat) {
-    return res.status(400).json({ error: 'GitHub PAT is required. Provide in request or set GITHUB_PAT env var.' });
+    return res.status(400).json({
+      error: 'GitHub PAT is required. Enter a token above or set the PAT secret on the server.',
+    });
   }
 
   scanState = { status: 'running', message: 'Starting scan...', progress: null, lastError: null };
@@ -174,7 +185,7 @@ app.post('/api/scan', async (req, res) => {
   }
 });
 
-app.post('/api/actions/:actionId', basicAuth, (req, res) => {
+api.post('/actions/:actionId', (req, res) => {
   const { repo } = req.body;
   const { actionId } = req.params;
 
@@ -193,9 +204,17 @@ app.post('/api/actions/:actionId', basicAuth, (req, res) => {
   });
 });
 
+app.use('/api', api);
+app.use(express.static(PUBLIC_DIR));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
+
 function startScheduler() {
   const cronExpr = process.env.AUDIT_CRON;
-  if (!cronExpr || !process.env.GITHUB_PAT) return;
+  const pat = getServerPat();
+  if (!cronExpr || !pat) return;
 
   if (!cron.validate(cronExpr)) {
     console.warn(`Invalid AUDIT_CRON expression: ${cronExpr}`);
@@ -209,7 +228,7 @@ function startScheduler() {
 
     try {
       const scan = await runAudit({
-        pat: process.env.GITHUB_PAT,
+        pat,
         accountFilter: process.env.AUDIT_ACCOUNT_FILTER || '',
         scope: 'all',
         mode: process.env.DEFAULT_SCAN_MODE || 'fast',
@@ -236,13 +255,10 @@ function startScheduler() {
   console.log(`Daily audit scheduled: ${cronExpr}`);
 }
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`GitHub Audit Dashboard running at http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`GitHub Audit Dashboard running at http://0.0.0.0:${PORT}`);
   if (process.env.DASHBOARD_USER) console.log('Basic auth enabled');
-  if (process.env.GITHUB_PAT) console.log('Server-side PAT configured');
+  if (getServerPat()) console.log('Server-side PAT configured');
+  else console.log('No server PAT — users must enter a token in the dashboard');
   startScheduler();
 });
