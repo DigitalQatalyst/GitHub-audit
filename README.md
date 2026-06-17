@@ -48,7 +48,7 @@ The dashboard is available at http://localhost:3000 (or your deployed host). Tea
 | `PORT` | Server port | `3000` |
 | `DASHBOARD_USER` | Basic auth username (optional) | — |
 | `DASHBOARD_PASSWORD` | Basic auth password (optional) | — |
-| `AUDIT_CRON` | Cron expression for daily scan | `0 6 * * *` |
+| `AUDIT_CRON` | Cron expression for daily scan | `0 5 * * *` |
 | `DATA_DIR` | Scan results storage | `./data` |
 | `DEFAULT_SCAN_MODE` | `fast` or `thorough` | `fast` |
 
@@ -65,7 +65,7 @@ For fine-grained tokens, grant repository access to all repos in the org with re
 
 ### Option 1: Server cron
 
-When `PAT` is set, the server runs a scheduled audit using `AUDIT_CRON` (default: 06:00 UTC daily). Results are saved to `DATA_DIR/latest.json`.
+When `PAT` is set, the server runs a scheduled audit using `AUDIT_CRON` (default: 05:00 UTC / 8:00 AM Nairobi daily). Results are saved to `DATA_DIR/latest.json`.
 
 ### Option 2: GitHub Actions
 
@@ -140,7 +140,7 @@ PAT=ghp_xxx \
 DASHBOARD_USER=audit-team \
 DASHBOARD_PASSWORD=secure-password \
 AUDIT_ACCOUNT_FILTER=DigitalQatalyst \
-AUDIT_CRON="0 6 * * *" \
+AUDIT_CRON="0 5 * * *" \
 docker compose up -d
 ```
 
