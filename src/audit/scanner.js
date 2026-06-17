@@ -296,43 +296,52 @@ function hasAssignedReviewers(pr) {
 }
 
 /**
- * Fetch all repositories accessible to the PAT (org inventory + collaborator access).
- * Archived repos are excluded from the returned list but counted in stats.
+ * Fetch repositories for the audit.
+ * When accountFilter is set (e.g. DigitalQatalyst), only that org/user's repos are included.
+ * Archived repos are excluded from the scan but counted in stats.
  */
 async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
   const repoMap = new Map();
+  const filter = (accountFilter || process.env.AUDIT_ACCOUNT_FILTER || '').trim();
 
-  // 1. Full org inventory when filter is set (primary source for ~30 org repos)
-  if (accountFilter) {
+  if (filter) {
+    progress('Fetching repositories', `Org only: ${filter}`);
     try {
       const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
-        org: accountFilter,
+        org: filter,
         per_page: 100,
         type: scope === 'public' ? 'public' : 'all',
       });
-      for (const r of orgRepos) repoMap.set(r.full_name, r);
-      progress('Org inventory', `${orgRepos.length} repos from ${accountFilter}`);
+      for (const r of orgRepos) {
+        if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
+          repoMap.set(r.full_name, r);
+        }
+      }
+      progress('Org inventory', `${repoMap.size} repos from ${filter}`);
     } catch (err) {
-      progress('Org fetch', `Could not list org repos: ${err.message}`);
+      progress('Org fetch', `Could not list org: ${err.message}`);
       try {
         const userRepos = await octokit.paginate(octokit.repos.listForUser, {
-          username: accountFilter,
+          username: filter,
           per_page: 100,
           type: scope === 'public' ? 'public' : 'all',
         });
-        for (const r of userRepos) repoMap.set(r.full_name, r);
-      } catch { /* fall through to PAT list */ }
+        for (const r of userRepos) {
+          if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
+            repoMap.set(r.full_name, r);
+          }
+        }
+      } catch { /* no repos found */ }
     }
+  } else {
+    progress('Fetching repositories', 'All accessible via PAT');
+    const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+      per_page: 100,
+      affiliation: 'owner,collaborator,organization_member',
+      sort: 'updated',
+    });
+    for (const r of allAccessible) repoMap.set(r.full_name, r);
   }
-
-  // 2. All repos the PAT can access (collaborator, personal, org member)
-  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-    per_page: 100,
-    affiliation: 'owner,collaborator,organization_member',
-    sort: 'updated',
-  });
-  for (const r of allAccessible) repoMap.set(r.full_name, r);
-  progress('PAT accessible', `${allAccessible.length} repos via token`);
 
   const totalDiscovered = repoMap.size;
   const allRepos = [...repoMap.values()];
@@ -346,7 +355,7 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
     progress('Excluded archived', `${archivedSkipped} archived repos skipped`);
   }
 
-  progress('Ready to scan', `${list.length} active repos (${totalDiscovered} total discovered)`);
+  progress('Ready to scan', `${list.length} active ${filter || 'accessible'} repos`);
 
   return { list, archivedSkipped, totalDiscovered };
 }
