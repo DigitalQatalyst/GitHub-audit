@@ -52,16 +52,18 @@ async function runAudit(options) {
   progress('Authenticated', viewer.login);
 
   const repos = await fetchAllRepositories(octokit, accountFilter, scope, progress);
-  progress('Found repositories', `${repos.length} repos to scan (public + private)`);
+  const archivedSkipped = repos.archivedSkipped || 0;
+  const repoList = repos.list;
+  progress('Found repositories', `${repoList.length} active repos to scan (archived excluded)`);
   const repositories = [];
   let namingViolations = 0;
   let openPrRisks = 0;
   let protectionUnknown = 0;
 
-  for (let i = 0; i < repos.length; i++) {
-    const repo = repos[i];
+  for (let i = 0; i < repoList.length; i++) {
+    const repo = repoList[i];
     const [owner, name] = [repo.owner.login, repo.name];
-    progress('Scanning', `${owner}/${name} (${i + 1}/${repos.length})`);
+    progress('Scanning', `${owner}/${name} (${i + 1}/${repoList.length})`);
 
     const rateCheck = await octokit.rateLimit.get();
     if (rateCheck.data.resources.core.remaining < 50) {
@@ -76,7 +78,7 @@ async function runAudit(options) {
     openPrRisks += repoAudit.prWorkflow?.atRisk || 0;
     if (repoAudit.protection?.unknown) protectionUnknown += repoAudit.protection.unknown;
 
-    if (mode === 'fast' && i < repos.length - 1) {
+    if (mode === 'fast' && i < repoList.length - 1) {
       await sleep(100);
     }
   }
@@ -117,6 +119,7 @@ async function runAudit(options) {
       openPrRisks,
       namingViolations,
       protectionUnknown,
+      archivedSkipped,
     },
     owners: Object.entries(ownerCounts).map(([name, count]) => ({ name, count })),
     repositories,
@@ -216,7 +219,7 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
   };
 
   const health = computeHealthStatus(metrics);
-  const risks = buildRisks(metrics, nonCompliantCount, hasContributing, commits24h);
+  const risks = buildRisks(metrics, nonCompliantCount, hasContributing, commits24h, health);
 
   const riskScore = risks.length + (health === 'critical' ? 10 : health === 'warning' ? 5 : 0);
 
@@ -327,15 +330,21 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
     }
   }
 
-  let repos = [...repoMap.values()];
+  const allRepos = [...repoMap.values()];
+  const archivedSkipped = allRepos.filter((r) => r.archived).length;
+  let repos = allRepos.filter((r) => !r.archived);
 
   if (scope === 'private') repos = repos.filter((r) => r.private);
   if (scope === 'public') repos = repos.filter((r) => !r.private);
 
-  return repos;
+  if (archivedSkipped > 0) {
+    progress('Excluded archived', `${archivedSkipped} archived repos skipped`);
+  }
+
+  return { list: repos, archivedSkipped };
 }
 
-function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h) {
+function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h, health) {
   const risks = [];
 
   if (commits24h === 0 && metrics.totalCommits > 0 && (metrics.daysSincePush ?? 999) < 90) {
@@ -382,7 +391,7 @@ function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h) {
     risks.push(enrichRisk('high-velocity-no-governance'));
   }
 
-  if (!hasContributing) {
+  if (!hasContributing && (health === 'critical' || risks.length >= 2)) {
     risks.push(enrichRisk('missing-contributing'));
   }
 
@@ -398,9 +407,6 @@ function buildBranchSummary(total, nonCompliant, allBranches, mode) {
   const parts = [`${total} total`];
   if (stale > 0) parts.push(`${stale} stale`);
   if (nonCompliant.length > 0) parts.push(`${nonCompliant.length} nonstd`);
-  if (nonCompliant.length > 0 && mode !== 'fast') {
-    parts.push(`e.g. ${nonCompliant.slice(0, 2).join(', ')}`);
-  }
 
   return {
     total,

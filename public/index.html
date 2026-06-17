@@ -15,13 +15,13 @@
       </div>
 
       <div class="config-bar">
-        <div class="config-field">
+        <div class="config-field pat-field">
           <label for="pat">GitHub PAT</label>
           <input type="password" id="pat" placeholder="ghp_... or github_pat_..." autocomplete="off">
         </div>
         <div class="config-field">
           <label for="account">Account filter</label>
-          <input type="text" id="account" placeholder="DigitalQatalyst">
+          <input type="text" id="account" placeholder="DigitalQatalyst" value="DigitalQatalyst">
         </div>
         <div class="config-field">
           <label for="scope">Scope</label>
@@ -42,7 +42,7 @@
           <label for="refresh-mode">Refresh</label>
           <select id="refresh-mode">
             <option value="manual">Manual</option>
-            <option value="auto">Auto (server cron)</option>
+            <option value="auto">Auto (daily cron)</option>
           </select>
         </div>
         <div class="config-actions">
@@ -53,12 +53,25 @@
       </div>
 
       <div class="status-bar" id="status-bar">
-        <span class="badge badge-idle" id="status-badge">Idle</span>
-        <span id="status-text">Load or run a scan to view results</span>
+        <span class="badge badge-idle" id="status-badge">Ready</span>
+        <span id="status-text">Click Refresh to scan all active (non-archived) repositories</span>
         <span class="status-meta" id="status-meta"></span>
       </div>
-      <p class="pat-note" id="pat-note"></p>
+      <p class="pat-note" id="pat-note">Checking server configuration…</p>
     </header>
+
+    <section class="welcome-empty" id="welcome-empty">
+      <div class="welcome-card">
+        <h2>Start your daily audit</h2>
+        <p>Click <strong>Refresh</strong> to scan all active repositories. Archived repos are automatically excluded.</p>
+        <ul>
+          <li>Repository activity and commit quality</li>
+          <li>Branch naming compliance</li>
+          <li>Pull request workflow health</li>
+          <li>Branch protection governance</li>
+        </ul>
+      </div>
+    </section>
 
     <section class="org-summary hidden" id="org-summary">
       <h2>Organisation Summary</h2>
@@ -90,7 +103,7 @@
 
     <section class="table-section hidden" id="table-section">
       <div class="table-toolbar">
-        <input type="search" id="repo-search" placeholder="Filter repositories...">
+        <input type="search" id="repo-search" placeholder="Filter repositories…">
         <select id="health-filter">
           <option value="">All health</option>
           <option value="critical">Critical</option>
@@ -121,12 +134,20 @@
 
     <div class="modal hidden" id="detail-modal">
       <div class="modal-content">
-        <button class="modal-close" id="modal-close">&times;</button>
+        <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
         <h2 id="modal-title"></h2>
-        <p id="modal-summary"></p>
+        <p id="modal-summary" class="modal-summary"></p>
         <div id="modal-risks"></div>
         <div id="modal-branches"></div>
         <div id="modal-commits"></div>
+      </div>
+    </div>
+
+    <div class="loading-overlay hidden" id="loading-overlay">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <p class="loading-title">Running governance audit…</p>
+        <p class="loading-detail" id="loading-detail">Scanning repositories</p>
       </div>
     </div>
   </div>

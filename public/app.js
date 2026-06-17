@@ -3,7 +3,6 @@
  */
 
 let currentScan = null;
-let pollTimer = null;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -15,27 +14,24 @@ async function api(path, options = {}) {
       ...options,
     });
   } catch {
-    throw new Error('Cannot reach the audit server. Run npm start and open the dashboard from that server.');
+    throw new Error('Cannot reach the API. Check that Vercel deployment completed successfully.');
   }
 
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    if (res.status === 404 && path !== '/scan/latest') {
-      throw new Error(err.error || 'API endpoint not found. Ensure the Node server is running (npm start).');
-    }
-    throw new Error(err.error || `Request failed: ${res.status}`);
+    throw new Error(data.error || `Request failed (${res.status})`);
   }
-  return res.json();
+  return data;
 }
 
-function showToast(msg) {
+function showToast(msg, type = 'info') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
   const el = document.createElement('div');
-  el.className = 'toast';
+  el.className = `toast toast-${type}`;
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 5000);
+  setTimeout(() => el.remove(), 6000);
 }
 
 function formatDate(iso) {
@@ -45,73 +41,90 @@ function formatDate(iso) {
 
 function setStatus(status, text, meta = '') {
   const badge = $('#status-badge');
-  badge.textContent = status;
+  badge.textContent = status === 'running' ? 'Scanning' : status;
   badge.className = `badge badge-${status}`;
   $('#status-text').textContent = text;
   $('#status-meta').textContent = meta;
 }
 
-async function loadConfig() {
-  try {
-    const cfg = await api('/config');
-    if (cfg.accountFilter) $('#account').value = cfg.accountFilter;
-    if (cfg.defaultMode) $('#mode').value = cfg.defaultMode;
-
-    const note = $('#pat-note');
-    if (cfg.hasServerPat) {
-      note.textContent = 'PAT is saved on server — you can refresh without entering a token.';
-    } else {
-      note.textContent = 'PAT is not saved. Enter a token to scan, or configure the PAT secret on the server.';
-    }
-
-    if (cfg.cronEnabled) {
-      $('#refresh-mode').value = 'auto';
-    }
-  } catch { /* offline */ }
+function showLoading(show, detail = '') {
+  const el = $('#loading-overlay');
+  if (!el) return;
+  el.classList.toggle('hidden', !show);
+  if (detail) $('#loading-detail').textContent = detail;
 }
 
-async function pollStatus() {
+function saveScanLocal(scan) {
   try {
-    const st = await api('/status');
-    if (st.status === 'running') {
-      setStatus('running', st.message, st.progress || '');
-      $('#btn-refresh').disabled = true;
-      pollTimer = setTimeout(pollStatus, 2000);
-    } else if (st.status === 'complete') {
-      setStatus('complete', st.message, buildMeta(st.lastScan));
-      $('#btn-refresh').disabled = false;
-      clearTimeout(pollTimer);
-      await loadLatestScan();
-    } else if (st.status === 'error') {
-      setStatus('error', st.lastError || 'Scan failed', '');
-      $('#btn-refresh').disabled = false;
-      clearTimeout(pollTimer);
-    } else if (st.lastScan) {
-      setStatus('complete', 'Last scan loaded', buildMeta(st.lastScan));
-      try { await loadLatestScan(); } catch { /* no results file yet */ }
-    } else {
-      setStatus('idle', 'Ready — click Refresh to start a scan', '');
-    }
-  } catch (err) {
-    setStatus('error', err.message, '');
+    sessionStorage.setItem('github-audit-scan', JSON.stringify({
+      completedAt: scan.completedAt,
+      summary: scan.summary,
+      orgReport: scan.orgReport,
+      owners: scan.owners,
+      repositories: scan.repositories,
+      rateLimitRemaining: scan.rateLimitRemaining,
+    }));
+  } catch { /* quota */ }
+}
+
+function loadScanLocal() {
+  try {
+    const raw = sessionStorage.getItem('github-audit-scan');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
   }
 }
 
-function buildMeta(lastScan) {
-  if (!lastScan) return '';
-  return `Last scan: ${formatDate(lastScan.completedAt)} · Rate remaining: ${lastScan.rateLimitRemaining ?? '—'}`;
+async function loadConfig() {
+  const cfg = await api('/config');
+  if (cfg.accountFilter) $('#account').value = cfg.accountFilter;
+  if (cfg.defaultMode) $('#mode').value = cfg.defaultMode;
+
+  const note = $('#pat-note');
+  if (cfg.hasServerPat) {
+    note.textContent = 'PAT is saved on server — you can refresh without entering a token.';
+    note.className = 'pat-note pat-saved';
+  } else {
+    note.textContent = 'PAT is not saved. Enter a token to scan, or add PAT in Vercel Environment Variables.';
+    note.className = 'pat-note';
+  }
 }
 
-async function loadLatestScan() {
-  const scan = await api('/scan/latest');
-  if (!scan.repositories?.length) return;
-  currentScan = scan;
-  renderDashboard(currentScan);
+async function tryLoadExistingScan() {
+  try {
+    const scan = await api('/scan/latest');
+    if (scan.repositories?.length) {
+      currentScan = scan;
+      renderDashboard(scan);
+      setStatus('complete', 'Last scan loaded', buildMeta(scan));
+      return true;
+    }
+  } catch { /* server empty */ }
+
+  const local = loadScanLocal();
+  if (local?.repositories?.length) {
+    currentScan = local;
+    renderDashboard(local);
+    setStatus('complete', 'Showing cached results from your last scan', buildMeta(local));
+    return true;
+  }
+  return false;
+}
+
+function buildMeta(scan) {
+  if (!scan) return '';
+  const parts = [];
+  if (scan.completedAt) parts.push(`Last scan: ${formatDate(scan.completedAt)}`);
+  if (scan.rateLimitRemaining != null) parts.push(`Rate remaining: ${scan.rateLimitRemaining}`);
+  if (scan.summary?.archivedSkipped) parts.push(`${scan.summary.archivedSkipped} archived excluded`);
+  return parts.join(' · ');
 }
 
 function renderDashboard(scan) {
   if (!scan?.summary) return;
 
+  $('#welcome-empty').classList.add('hidden');
   $('#org-summary').classList.remove('hidden');
   $('#kpi-section').classList.remove('hidden');
   $('#charts-section').classList.remove('hidden');
@@ -129,8 +142,7 @@ function renderDashboard(scan) {
 
   if (scan.orgReport) {
     $('#org-assessment').textContent = scan.orgReport.overallAssessment;
-    const findingsEl = $('#org-findings');
-    findingsEl.innerHTML = (scan.orgReport.keyFindings || []).map((f) => `
+    $('#org-findings').innerHTML = (scan.orgReport.keyFindings || []).map((f) => `
       <div class="finding-card ${f.severity === 'Warning' ? 'warning' : ''}">
         <h4>${f.finding}</h4>
         <div class="count">${f.count}</div>
@@ -155,7 +167,7 @@ function renderHealthBars(s) {
     <div class="health-bar-row">
       <span class="health-bar-label">${b.label}</span>
       <div class="health-bar-track">
-        <div class="health-bar-fill ${b.cls}" style="width: ${(b.count / total) * 100}%"></div>
+        <div class="health-bar-fill ${b.cls}" style="width: ${Math.max((b.count / total) * 100, b.count ? 4 : 0)}%"></div>
       </div>
       <span class="health-bar-count">${b.count}</span>
     </div>
@@ -164,7 +176,7 @@ function renderHealthBars(s) {
 
 function renderOwners(owners) {
   $('#owner-list').innerHTML = owners.map((o) => `
-    <li><span>${o.name}</span><span>${o.count}</span></li>
+    <li><span>${o.name}</span><span class="owner-count">${o.count}</span></li>
   `).join('');
 }
 
@@ -178,8 +190,7 @@ function renderRepoTable(repos) {
     return true;
   });
 
-  const tbody = $('#repo-tbody');
-  tbody.innerHTML = filtered.map((r) => `
+  $('#repo-tbody').innerHTML = filtered.map((r) => `
     <tr data-repo="${r.fullName}">
       <td>
         <div class="repo-name" data-action="detail">${r.fullName}</div>
@@ -188,33 +199,47 @@ function renderRepoTable(repos) {
       <td><span class="health-badge ${r.health}">${r.healthLabel}</span></td>
       <td class="cell-muted">${r.activity?.display || '—'}</td>
       <td>
-        <div>${r.commitHygiene?.display || '—'}</div>
-        ${r.commitHygiene?.samples?.length ? `<div class="cell-muted">e.g. "${r.commitHygiene.samples[0]}"</div>` : ''}
+        <div class="hygiene-rating">${r.commitHygiene?.display || '—'}</div>
+        ${r.commitHygiene?.samples?.length ? `<div class="cell-muted">e.g. "${escapeHtml(r.commitHygiene.samples[0])}"</div>` : ''}
       </td>
       <td class="cell-muted">${r.branches?.display || '—'}</td>
       <td class="cell-muted">${r.prWorkflow?.display || '—'}</td>
-      <td class="cell-muted">${r.protection?.summary || '—'}</td>
+      <td class="cell-muted protection-cell">${r.protection?.summary || '—'}</td>
       <td class="cell-muted">${r.docs?.display || '—'}</td>
-      <td>
-        ${(r.risks || []).map((risk) => `
-          <span class="risk-pill" title="${risk.summary || ''} — ${risk.action || ''}">${risk.label}</span>
-        `).join('')}
-      </td>
-      <td>
-        ${(r.actions || []).map((a) => `
-          <button class="btn-action" data-action="${a.id}" data-repo="${r.fullName}">${a.label}</button>
-        `).join('')}
-      </td>
+      <td class="risks-cell">${renderRiskPills(r.risks)}</td>
+      <td class="actions-cell">${renderActions(r.actions, r.fullName)}</td>
     </tr>
   `).join('');
 
+  bindTableEvents(filtered);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+function renderRiskPills(risks) {
+  if (!risks?.length) return '<span class="cell-muted">None</span>';
+  return risks.slice(0, 5).map((risk) => `
+    <span class="risk-pill" title="${escapeHtml(risk.summary || '')} — ${escapeHtml(risk.action || '')}">${escapeHtml(risk.label)}</span>
+  `).join('');
+}
+
+function renderActions(actions, fullName) {
+  if (!actions?.length) return '<span class="cell-muted">—</span>';
+  return actions.map((a) => `
+    <button class="btn-action" data-action="${a.id}" data-repo="${fullName}">${a.label}</button>
+  `).join('');
+}
+
+function bindTableEvents(repos) {
+  const tbody = $('#repo-tbody');
   tbody.querySelectorAll('[data-action="detail"]').forEach((el) => {
     el.addEventListener('click', () => {
       const repo = el.closest('tr').dataset.repo;
       showRepoDetail(repos.find((r) => r.fullName === repo));
     });
   });
-
   tbody.querySelectorAll('.btn-action').forEach((btn) => {
     btn.addEventListener('click', () => handleAction(btn.dataset.action, btn.dataset.repo));
   });
@@ -227,26 +252,30 @@ function showRepoDetail(repo) {
 
   $('#modal-risks').innerHTML = `
     <div class="modal-section">
-      <h3>Key Risks</h3>
-      <ul>${(repo.risks || []).map((r) => `
-        <li><strong>${r.label}</strong> — ${r.summary} <em>${r.action}</em></li>
-      `).join('') || '<li>No risks detected</li>'}</ul>
+      <h3>What needs attention</h3>
+      <ul class="risk-detail-list">${(repo.risks || []).map((r) => `
+        <li>
+          <strong>${escapeHtml(r.label)}</strong>
+          <p>${escapeHtml(r.summary || '')}</p>
+          <p class="action-hint">→ ${escapeHtml(r.action || '')}</p>
+        </li>
+      `).join('') || '<li>No risks detected — this repo looks healthy.</li>'}</ul>
     </div>
   `;
 
   const branchSamples = repo.branches?.samples || [];
   $('#modal-branches').innerHTML = branchSamples.length ? `
     <div class="modal-section">
-      <h3>Non-Compliant Branches (sample)</h3>
-      <ul>${branchSamples.map((b) => `<li>${b}</li>`).join('')}</ul>
+      <h3>Non-standard branch names (sample)</h3>
+      <ul>${branchSamples.map((b) => `<li><code>${escapeHtml(b)}</code></li>`).join('')}</ul>
     </div>
   ` : '';
 
   const commitSamples = repo.commitHygiene?.samples || [];
   $('#modal-commits').innerHTML = commitSamples.length ? `
     <div class="modal-section">
-      <h3>Vague Commit Examples</h3>
-      <ul>${commitSamples.map((c) => `<li>"${c}"</li>`).join('')}</ul>
+      <h3>Unclear commit messages (examples)</h3>
+      <ul>${commitSamples.map((c) => `<li>"${escapeHtml(c)}"</li>`).join('')}</ul>
     </div>
   ` : '';
 
@@ -259,9 +288,9 @@ async function handleAction(actionId, repo) {
       method: 'POST',
       body: JSON.stringify({ repo }),
     });
-    showToast(result.message);
+    showToast(result.message, 'info');
   } catch (err) {
-    showToast(err.message);
+    showToast(err.message, 'error');
   }
 }
 
@@ -272,26 +301,38 @@ async function startScan() {
   const mode = $('#mode').value;
 
   $('#btn-refresh').disabled = true;
-  setStatus('running', 'Starting scan...', '');
+  setStatus('running', 'Scanning repositories — this may take 1–3 minutes…', '');
+  showLoading(true, 'Fetching repos, commits, branches, and pull requests…');
 
   try {
-    await api('/scan', {
+    const scan = await api('/scan', {
       method: 'POST',
       body: JSON.stringify({ pat: pat || undefined, accountFilter, scope, mode }),
     });
-    pollTimer = setTimeout(pollStatus, 1500);
+
+    currentScan = scan;
+    saveScanLocal(scan);
+    renderDashboard(scan);
+    setStatus('complete', scan.message || 'Scan complete', buildMeta(scan));
+    showToast(`Scanned ${scan.summary?.visibleRepos || 0} active repositories`, 'success');
   } catch (err) {
     setStatus('error', err.message, '');
+    showToast(err.message, 'error');
+  } finally {
     $('#btn-refresh').disabled = false;
-    showToast(err.message);
+    showLoading(false);
   }
 }
 
 function exportFile(type) {
+  if (!currentScan && type !== 'json') {
+    showToast('Run a scan first before exporting', 'error');
+    return;
+  }
   window.open(`/api/export/${type}`, '_blank');
 }
 
-function init() {
+async function init() {
   $('#btn-refresh').addEventListener('click', startScan);
   $('#btn-json').addEventListener('click', () => exportFile('json'));
   $('#btn-csv').addEventListener('click', () => exportFile('csv'));
@@ -306,8 +347,21 @@ function init() {
     if (e.target.id === 'detail-modal') $('#detail-modal').classList.add('hidden');
   });
 
-  loadConfig();
-  pollStatus();
+  try {
+    await loadConfig();
+    const loaded = await tryLoadExistingScan();
+    if (!loaded) {
+      setStatus('idle', 'Ready — click Refresh to start a scan', '');
+    }
+  } catch (err) {
+    setStatus('idle', 'Ready — click Refresh to start a scan', '');
+    const local = loadScanLocal();
+    if (local?.repositories?.length) {
+      currentScan = local;
+      renderDashboard(local);
+      setStatus('complete', 'Showing cached results', buildMeta(local));
+    }
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
