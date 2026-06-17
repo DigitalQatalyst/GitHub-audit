@@ -45,8 +45,8 @@ module.exports = async (req, res) => {
         hasServerPat: Boolean(getServerPat()),
         authEnabled: Boolean(process.env.DASHBOARD_USER && process.env.DASHBOARD_PASSWORD),
         platform: isVercel() ? 'vercel' : 'node',
-        cronSchedule: '0 6 * * *',
-        cronDescription: 'Daily at 06:00 UTC (10:00 AM Gulf Standard Time)',
+        cronSchedule: '0 5 * * *',
+        cronDescription: 'Daily at 8:00 AM Nairobi time (05:00 UTC)',
       });
     }
 
