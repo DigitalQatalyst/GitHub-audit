@@ -347,19 +347,27 @@ async function init() {
     if (e.target.id === 'detail-modal') $('#detail-modal').classList.add('hidden');
   });
 
+  // Load config quietly — never show error on page load
   try {
     await loadConfig();
+  } catch {
+    $('#pat-note').textContent = 'PAT is not saved. Enter a token to scan, or add PAT in Vercel Environment Variables.';
+  }
+
+  // Restore cached or server scan without blocking UI
+  try {
     const loaded = await tryLoadExistingScan();
     if (!loaded) {
       setStatus('idle', 'Ready — click Refresh to start a scan', '');
     }
-  } catch (err) {
-    setStatus('idle', 'Ready — click Refresh to start a scan', '');
+  } catch {
     const local = loadScanLocal();
     if (local?.repositories?.length) {
       currentScan = local;
       renderDashboard(local);
       setStatus('complete', 'Showing cached results', buildMeta(local));
+    } else {
+      setStatus('idle', 'Ready — click Refresh to start a scan', '');
     }
   }
 }
