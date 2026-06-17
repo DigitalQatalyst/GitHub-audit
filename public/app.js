@@ -86,7 +86,7 @@ async function loadConfig() {
     note.textContent = 'PAT is saved on server — you can refresh without entering a token.';
     note.className = 'pat-note pat-saved';
   } else {
-    note.textContent = 'PAT is not saved. Enter a token to scan, or add PAT in Vercel Environment Variables.';
+    note.textContent = 'PAT is not saved. Enter a token above, or add PAT in Vercel Environment Variables.';
     note.className = 'pat-note';
   }
 }

@@ -1,10 +1,29 @@
 require('dotenv').config();
-const { runAudit } = require('./audit/scanner');
-const { saveScan, loadLatestScan, listScanHistory } = require('./audit/storage');
-const { buildOrganisationSummary } = require('./audit/descriptions');
-const { getServerPat, getDataDir, isVercel } = require('./config');
 
-const DATA_DIR = getDataDir();
+const { getServerPat, getDataDir } = require('./config');
+
+let _scanner;
+let _storage;
+let _descriptions;
+
+function lazyScanner() {
+  if (!_scanner) _scanner = require('./audit/scanner');
+  return _scanner;
+}
+
+function lazyStorage() {
+  if (!_storage) _storage = require('./audit/storage');
+  return _storage;
+}
+
+function lazyDescriptions() {
+  if (!_descriptions) _descriptions = require('./audit/descriptions');
+  return _descriptions;
+}
+
+function dataDir() {
+  return getDataDir();
+}
 
 function getConfig() {
   return {
@@ -12,12 +31,12 @@ function getConfig() {
     defaultMode: process.env.DEFAULT_SCAN_MODE || 'fast',
     hasServerPat: Boolean(getServerPat()),
     authEnabled: Boolean(process.env.DASHBOARD_USER && process.env.DASHBOARD_PASSWORD),
-    platform: isVercel() ? 'vercel' : 'node',
   };
 }
 
 function getStatus() {
-  const latest = loadLatestScan(DATA_DIR);
+  const { loadLatestScan } = lazyStorage();
+  const latest = loadLatestScan(dataDir());
   return {
     status: latest ? 'complete' : 'idle',
     message: latest ? 'Last scan available' : 'Ready — click Refresh to start a scan',
@@ -30,22 +49,30 @@ function getStatus() {
 }
 
 function getLatestScan() {
-  const latest = loadLatestScan(DATA_DIR);
+  const { loadLatestScan } = lazyStorage();
+  const { buildOrganisationSummary } = lazyDescriptions();
+  const latest = loadLatestScan(dataDir());
   if (!latest) {
     return { status: 'empty', repositories: [], summary: null, orgReport: null };
   }
-  const orgReport = buildOrganisationSummary(latest);
-  return { ...latest, orgReport };
+  return { ...latest, orgReport: buildOrganisationSummary(latest) };
+}
+
+function listScanHistory() {
+  const { listScanHistory: list } = lazyStorage();
+  return list(dataDir());
 }
 
 function getExportJson() {
-  const latest = loadLatestScan(DATA_DIR);
+  const { loadLatestScan } = lazyStorage();
+  const latest = loadLatestScan(dataDir());
   if (!latest) return { error: 'No scan results yet. Run a scan first.', status: 404 };
   return { data: latest };
 }
 
 function getExportCsv() {
-  const latest = loadLatestScan(DATA_DIR);
+  const { loadLatestScan } = lazyStorage();
+  const latest = loadLatestScan(dataDir());
   if (!latest) return { error: 'No scan results yet. Run a scan first.', status: 404 };
 
   const headers = [
@@ -84,9 +111,13 @@ async function runScan(body = {}) {
     };
   }
 
+  const { runAudit } = lazyScanner();
+  const { saveScan } = lazyStorage();
+  const { buildOrganisationSummary } = lazyDescriptions();
+
   const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
   scan.orgReport = buildOrganisationSummary(scan);
-  saveScan(DATA_DIR, scan);
+  saveScan(dataDir(), scan);
 
   return {
     status: 'complete',
@@ -97,44 +128,23 @@ async function runScan(body = {}) {
 }
 
 async function runDailyCron(headers = {}) {
-  const isVercelCron = headers['x-vercel-cron'] === '1';
-  const pat = getServerPat();
-  if (!isVercelCron || !pat) {
+  if (headers['x-vercel-cron'] !== '1' || !getServerPat()) {
     return { error: 'Unauthorized', status: 401 };
   }
-
-  const scan = await runAudit({
-    pat,
-    accountFilter: process.env.AUDIT_ACCOUNT_FILTER || '',
-    scope: 'all',
-    mode: process.env.DEFAULT_SCAN_MODE || 'fast',
-  });
-  scan.orgReport = buildOrganisationSummary(scan);
-  saveScan(DATA_DIR, scan);
-  return { status: 'complete', summary: scan.summary };
+  return runScan({});
 }
 
 function getActionGuidance(actionId, repo) {
   const guidance = {
-    'enforce-protection': `On ${repo}: Settings → Branches → add protection rules on main/develop/staging requiring pull request reviews.`,
-    'add-contributing': `Add CONTRIBUTING.md to ${repo} explaining branch naming (feature/description-dev) and PR review rules.`,
-    'fix-branch-names': `Rename branches in ${repo} to the standard format: feature/description-developer or bugfix/description-developer.`,
-    'triage-prs': `Review open PRs in ${repo}: assign reviewers, merge finished work, or close abandoned PRs.`,
+    'enforce-protection': `On ${repo}: Settings → Branches → add protection rules requiring pull request reviews.`,
+    'add-contributing': `Add CONTRIBUTING.md to ${repo} with branch naming and PR review guidelines.`,
+    'fix-branch-names': `Rename branches in ${repo} to feature/description-developer or bugfix/description-developer.`,
+    'triage-prs': `Review open PRs in ${repo}: assign reviewers, merge or close stale PRs.`,
   };
-  return {
-    actionId, repo, status: 'guidance',
-    message: guidance[actionId] || 'Manual remediation required via GitHub.',
-  };
+  return { actionId, repo, status: 'guidance', message: guidance[actionId] || 'Manual remediation required via GitHub.' };
 }
 
 module.exports = {
-  getConfig,
-  getStatus,
-  getLatestScan,
-  getExportJson,
-  getExportCsv,
-  runScan,
-  runDailyCron,
-  getActionGuidance,
-  listScanHistory: () => listScanHistory(DATA_DIR),
+  getConfig, getStatus, getLatestScan, listScanHistory,
+  getExportJson, getExportCsv, runScan, runDailyCron, getActionGuidance,
 };

@@ -77,10 +77,6 @@ async function runAudit(options) {
     namingViolations += repoAudit.branches?.nonCompliant || 0;
     openPrRisks += repoAudit.prWorkflow?.atRisk || 0;
     if (repoAudit.protection?.unknown) protectionUnknown += repoAudit.protection.unknown;
-
-    if (mode === 'fast' && i < repoList.length - 1) {
-      await sleep(100);
-    }
   }
 
   repositories.sort((a, b) => {
