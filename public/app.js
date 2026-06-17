@@ -93,22 +93,14 @@ async function loadConfig() {
 
 async function tryLoadExistingScan() {
   try {
-    const scan = await api('/scan/latest');
+    const scan = await api('/latest');
     if (scan.repositories?.length) {
       currentScan = scan;
       renderDashboard(scan);
       setStatus('complete', 'Last scan loaded', buildMeta(scan));
       return true;
     }
-  } catch { /* server empty */ }
-
-  const local = loadScanLocal();
-  if (local?.repositories?.length) {
-    currentScan = local;
-    renderDashboard(local);
-    setStatus('complete', 'Showing cached results from your last scan', buildMeta(local));
-    return true;
-  }
+  } catch { /* try cache */ }
   return false;
 }
 
@@ -329,7 +321,8 @@ function exportFile(type) {
     showToast('Run a scan first before exporting', 'error');
     return;
   }
-  window.open(`/api/export/${type}`, '_blank');
+  const path = type === 'json' ? '/export-json' : '/export-csv';
+  window.open(`/api${path}`, '_blank');
 }
 
 async function init() {

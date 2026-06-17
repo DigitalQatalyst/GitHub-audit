@@ -54,6 +54,10 @@ module.exports = async (req, res) => {
       return json(res, 200, h.getStatus());
     }
 
+    if (route === 'latest' && req.method === 'GET') {
+      return json(res, 200, h.getLatestScan());
+    }
+
     if (route === 'scan/latest' && req.method === 'GET') {
       return json(res, 200, h.getLatestScan());
     }
@@ -62,11 +66,26 @@ module.exports = async (req, res) => {
       return json(res, 200, { files: h.listScanHistory() });
     }
 
+    if (route === 'export-json' && req.method === 'GET') {
+      const result = h.getExportJson();
+      if (result.error) return json(res, result.status, { error: result.error });
+      res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
+      return json(res, 200, result.data);
+    }
+
     if (route === 'export/json' && req.method === 'GET') {
       const result = h.getExportJson();
       if (result.error) return json(res, result.status, { error: result.error });
       res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
       return json(res, 200, result.data);
+    }
+
+    if (route === 'export-csv' && req.method === 'GET') {
+      const result = h.getExportCsv();
+      if (result.error) return json(res, result.status, { error: result.error });
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=audit-results.csv');
+      return res.status(200).send(result.csv);
     }
 
     if (route === 'export/csv' && req.method === 'GET') {

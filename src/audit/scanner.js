@@ -1,4 +1,3 @@
-const { Octokit } = require('@octokit/rest');
 const {
   isCompliantBranchName,
   isVagueCommitMessage,
@@ -41,6 +40,7 @@ async function runAudit(options) {
     onProgress,
   } = options;
 
+  const { Octokit } = await import('@octokit/rest');
   const octokit = new Octokit({ auth: pat, userAgent: 'github-audit-dashboard/1.0' });
 
   const progress = (msg, detail) => {
