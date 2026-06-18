@@ -114,16 +114,21 @@ async function runScan(body = {}) {
   const { saveScan } = lazyStorage();
   const { buildOrganisationSummary } = lazyDescriptions();
 
-  const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
-  scan.orgReport = buildOrganisationSummary(scan);
-  await saveScan(dataDir(), scan, { pat });
+  try {
+    const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
+    scan.orgReport = buildOrganisationSummary(scan);
+    await saveScan(dataDir(), scan, { pat });
 
-  return {
-    status: 'complete',
-    message: `Scan complete — ${scan.summary.visibleRepos} active repositories`,
-    ...scan,
-    orgReport: scan.orgReport,
-  };
+    return {
+      status: 'complete',
+      message: `Scan complete — ${scan.summary.visibleRepos} active repositories`,
+      ...scan,
+      orgReport: scan.orgReport,
+    };
+  } catch (err) {
+    const message = err.message || 'Scan failed';
+    return { error: message, status: 500 };
+  }
 }
 
 async function runDailyCron(headers = {}) {
