@@ -53,15 +53,15 @@ module.exports = async (req, res) => {
     const h = loadHandlers();
 
     if (route === 'status' && req.method === 'GET') {
-      return json(res, 200, h.getStatus());
+      return json(res, 200, await h.getStatus());
     }
 
     if (route === 'latest' && req.method === 'GET') {
-      return json(res, 200, h.getLatestScan());
+      return json(res, 200, await h.getLatestScan());
     }
 
     if (route === 'scan/latest' && req.method === 'GET') {
-      return json(res, 200, h.getLatestScan());
+      return json(res, 200, await h.getLatestScan());
     }
 
     if (route === 'scan/history' && req.method === 'GET') {
@@ -69,21 +69,21 @@ module.exports = async (req, res) => {
     }
 
     if (route === 'export-json' && req.method === 'GET') {
-      const result = h.getExportJson();
+      const result = await h.getExportJson();
       if (result.error) return json(res, result.status, { error: result.error });
       res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
       return json(res, 200, result.data);
     }
 
     if (route === 'export/json' && req.method === 'GET') {
-      const result = h.getExportJson();
+      const result = await h.getExportJson();
       if (result.error) return json(res, result.status, { error: result.error });
       res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
       return json(res, 200, result.data);
     }
 
     if (route === 'export-csv' && req.method === 'GET') {
-      const result = h.getExportCsv();
+      const result = await h.getExportCsv();
       if (result.error) return json(res, result.status, { error: result.error });
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename=audit-results.csv');
@@ -91,7 +91,7 @@ module.exports = async (req, res) => {
     }
 
     if (route === 'export/csv' && req.method === 'GET') {
-      const result = h.getExportCsv();
+      const result = await h.getExportCsv();
       if (result.error) return json(res, result.status, { error: result.error });
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename=audit-results.csv');

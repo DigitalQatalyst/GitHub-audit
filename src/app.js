@@ -31,35 +31,35 @@ api.use(basicAuth);
 
 api.get('/health', (req, res) => res.json({ ok: true, hasPat: Boolean(getServerPat()), platform: 'node' }));
 api.get('/config', (req, res) => res.json(handlers.getConfig()));
-api.get('/status', (req, res) => res.json(handlers.getStatus()));
-api.get('/latest', (req, res) => res.json(handlers.getLatestScan()));
-api.get('/scan/latest', (req, res) => res.json(handlers.getLatestScan()));
+api.get('/status', async (req, res) => res.json(await handlers.getStatus()));
+api.get('/latest', async (req, res) => res.json(await handlers.getLatestScan()));
+api.get('/scan/latest', async (req, res) => res.json(await handlers.getLatestScan()));
 api.get('/scan/history', (req, res) => res.json({ files: handlers.listScanHistory() }));
 
-api.get('/export-json', (req, res) => {
-  const result = handlers.getExportJson();
+api.get('/export-json', async (req, res) => {
+  const result = await handlers.getExportJson();
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
   res.json(result.data);
 });
 
-api.get('/export-csv', (req, res) => {
-  const result = handlers.getExportCsv();
+api.get('/export-csv', async (req, res) => {
+  const result = await handlers.getExportCsv();
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=audit-results.csv');
   res.send(result.csv);
 });
 
-api.get('/export/json', (req, res) => {
-  const result = handlers.getExportJson();
+api.get('/export/json', async (req, res) => {
+  const result = await handlers.getExportJson();
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.setHeader('Content-Disposition', 'attachment; filename=audit-results.json');
   res.json(result.data);
 });
 
-api.get('/export/csv', (req, res) => {
-  const result = handlers.getExportCsv();
+api.get('/export/csv', async (req, res) => {
+  const result = await handlers.getExportCsv();
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=audit-results.csv');

@@ -56,20 +56,19 @@ function showLoading(show, detail = '') {
 
 function saveScanLocal(scan) {
   try {
-    sessionStorage.setItem('github-audit-scan', JSON.stringify({
+    localStorage.setItem('github-audit-scan', JSON.stringify({
       completedAt: scan.completedAt,
       summary: scan.summary,
       orgReport: scan.orgReport,
       owners: scan.owners,
       repositories: scan.repositories,
-      rateLimitRemaining: scan.rateLimitRemaining,
     }));
   } catch { /* quota */ }
 }
 
 function loadScanLocal() {
   try {
-    const raw = sessionStorage.getItem('github-audit-scan');
+    const raw = localStorage.getItem('github-audit-scan');
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -84,21 +83,28 @@ async function loadConfig() {
   const note = $('#pat-note');
   const parts = [];
   if (cfg.cronDescription) parts.push(`Auto-scan: ${cfg.cronDescription}`);
-  parts.push('Scans all non-archived DigitalQatalyst repos (same as archived:false on GitHub)');
+  parts.push('Scans all non-archived DigitalQatalyst repos');
   note.textContent = parts.join(' · ');
   note.className = 'pat-note pat-saved';
 }
 
 async function tryLoadExistingScan() {
+  let serverScan = null;
+  let localScan = loadScanLocal();
+
   try {
-    const scan = await api('/latest');
-    if (scan.repositories?.length) {
-      currentScan = scan;
-      renderDashboard(scan);
-      setStatus('complete', 'Last scan loaded', buildMeta(scan));
-      return true;
-    }
-  } catch { /* try cache */ }
+    serverScan = await api('/latest');
+    if (!serverScan.repositories?.length) serverScan = null;
+  } catch { /* try local cache */ }
+
+  const scan = pickNewerScan(localScan, serverScan);
+  if (scan?.repositories?.length) {
+    currentScan = scan;
+    saveScanLocal(scan);
+    renderDashboard(scan);
+    setStatus('complete', 'Last scan loaded', buildMeta(scan));
+    return true;
+  }
   return false;
 }
 
@@ -106,11 +112,14 @@ function buildMeta(scan) {
   if (!scan) return '';
   const parts = [];
   if (scan.completedAt) parts.push(`Last scan: ${formatDate(scan.completedAt)}`);
-  if (scan.summary?.visibleRepos != null) parts.push(`${scan.summary.visibleRepos} active repos scanned`);
-  if (scan.summary?.totalDiscovered) parts.push(`${scan.summary.totalDiscovered} discovered`);
-  if (scan.summary?.archivedSkipped) parts.push(`${scan.summary.archivedSkipped} archived excluded`);
-  if (scan.rateLimitRemaining != null) parts.push(`Rate remaining: ${scan.rateLimitRemaining}`);
+  if (scan.summary?.visibleRepos != null) parts.push(`${scan.summary.visibleRepos} repos scanned`);
   return parts.join(' · ');
+}
+
+function pickNewerScan(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(b.completedAt || 0) >= new Date(a.completedAt || 0) ? b : a;
 }
 
 function repoUrl(repo) {
@@ -314,7 +323,7 @@ async function startScan() {
 
   $('#btn-refresh').disabled = true;
   setStatus('running', 'Scanning all non-archived DigitalQatalyst repos…', '');
-  showLoading(true, 'Fetching repos matching org:DigitalQatalyst archived:false…');
+  showLoading(true, 'Fetching organisation repositories…');
 
   try {
     const scan = await api('/scan', {
@@ -377,14 +386,7 @@ async function init() {
       setStatus('idle', 'Ready — click Refresh to start a scan', '');
     }
   } catch {
-    const local = loadScanLocal();
-    if (local?.repositories?.length) {
-      currentScan = local;
-      renderDashboard(local);
-      setStatus('complete', 'Showing cached results', buildMeta(local));
-    } else {
-      setStatus('idle', 'Ready — click Refresh to start a scan', '');
-    }
+    setStatus('idle', 'Ready — click Refresh to start a scan', '');
   }
 }
 

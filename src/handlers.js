@@ -34,24 +34,23 @@ function getConfig() {
   };
 }
 
-function getStatus() {
+async function getStatus() {
   const { loadLatestScan } = lazyStorage();
-  const latest = loadLatestScan(dataDir());
+  const latest = await loadLatestScan(dataDir(), { pat: getServerPat() });
   return {
     status: latest ? 'complete' : 'idle',
     message: latest ? 'Last scan available' : 'Ready — click Refresh to start a scan',
     lastScan: latest ? {
       completedAt: latest.completedAt,
-      rateLimitRemaining: latest.rateLimitRemaining,
       summary: latest.summary,
     } : null,
   };
 }
 
-function getLatestScan() {
+async function getLatestScan() {
   const { loadLatestScan } = lazyStorage();
   const { buildOrganisationSummary } = lazyDescriptions();
-  const latest = loadLatestScan(dataDir());
+  const latest = await loadLatestScan(dataDir(), { pat: getServerPat() });
   if (!latest) {
     return { status: 'empty', repositories: [], summary: null, orgReport: null };
   }
@@ -63,16 +62,16 @@ function listScanHistory() {
   return list(dataDir());
 }
 
-function getExportJson() {
+async function getExportJson() {
   const { loadLatestScan } = lazyStorage();
-  const latest = loadLatestScan(dataDir());
+  const latest = await loadLatestScan(dataDir(), { pat: getServerPat() });
   if (!latest) return { error: 'No scan results yet. Run a scan first.', status: 404 };
   return { data: latest };
 }
 
-function getExportCsv() {
+async function getExportCsv() {
   const { loadLatestScan } = lazyStorage();
-  const latest = loadLatestScan(dataDir());
+  const latest = await loadLatestScan(dataDir(), { pat: getServerPat() });
   if (!latest) return { error: 'No scan results yet. Run a scan first.', status: 404 };
 
   const headers = [
@@ -115,16 +114,21 @@ async function runScan(body = {}) {
   const { saveScan } = lazyStorage();
   const { buildOrganisationSummary } = lazyDescriptions();
 
-  const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
-  scan.orgReport = buildOrganisationSummary(scan);
-  saveScan(dataDir(), scan);
+  try {
+    const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
+    scan.orgReport = buildOrganisationSummary(scan);
+    await saveScan(dataDir(), scan, { pat });
 
-  return {
-    status: 'complete',
-    message: `Scan complete — ${scan.summary.visibleRepos} active repositories`,
-    ...scan,
-    orgReport: scan.orgReport,
-  };
+    return {
+      status: 'complete',
+      message: `Scan complete — ${scan.summary.visibleRepos} active repositories`,
+      ...scan,
+      orgReport: scan.orgReport,
+    };
+  } catch (err) {
+    const message = err.message || 'Scan failed';
+    return { error: message, status: 500 };
+  }
 }
 
 async function runDailyCron(headers = {}) {
