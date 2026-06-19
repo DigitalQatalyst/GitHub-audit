@@ -98,6 +98,13 @@ module.exports = async (req, res) => {
       return res.status(200).send(result.csv);
     }
 
+    if ((route === 'report/teams') && req.method === 'GET') {
+      const result = h.getTeamsReport();
+      if (result.error) return json(res, result.status, { error: result.error });
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send(result.text);
+    }
+
     if (route === 'scan' && req.method === 'POST') {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
       const result = await h.runScan(body);

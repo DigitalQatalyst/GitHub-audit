@@ -66,6 +66,12 @@ api.get('/export/csv', (req, res) => {
   res.send(result.csv);
 });
 
+api.get('/report/teams', (req, res) => {
+  const result = handlers.getTeamsReport();
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.type('text/plain').send(result.text);
+});
+
 api.post('/scan', async (req, res) => {
   try {
     const result = await handlers.runScan(req.body);

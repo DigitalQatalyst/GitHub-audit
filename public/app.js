@@ -60,6 +60,7 @@ function saveScanLocal(scan) {
       completedAt: scan.completedAt,
       summary: scan.summary,
       orgReport: scan.orgReport,
+      teamsReport: scan.teamsReport,
       owners: scan.owners,
       repositories: scan.repositories,
       rateLimitRemaining: scan.rateLimitRemaining,
@@ -84,7 +85,7 @@ async function loadConfig() {
   const note = $('#pat-note');
   const parts = [];
   if (cfg.cronDescription) parts.push(`Auto-scan: ${cfg.cronDescription}`);
-  parts.push('Scans all non-archived DigitalQatalyst repos (same as archived:false on GitHub)');
+  parts.push('Scans all active org repos (public + private, archived excluded)');
   note.textContent = parts.join(' · ');
   note.className = 'pat-note pat-saved';
 }
@@ -106,9 +107,13 @@ function buildMeta(scan) {
   if (!scan) return '';
   const parts = [];
   if (scan.completedAt) parts.push(`Last scan: ${formatDate(scan.completedAt)}`);
-  if (scan.summary?.visibleRepos != null) parts.push(`${scan.summary.visibleRepos} active repos scanned`);
-  if (scan.summary?.totalDiscovered) parts.push(`${scan.summary.totalDiscovered} discovered`);
+  if (scan.summary?.visibleRepos != null) parts.push(`${scan.summary.visibleRepos} scanned`);
+  if (scan.summary?.totalDiscovered) parts.push(`${scan.summary.totalDiscovered} total`);
+  if (scan.summary?.totalActive != null) parts.push(`${scan.summary.totalActive} active`);
   if (scan.summary?.archivedSkipped) parts.push(`${scan.summary.archivedSkipped} archived excluded`);
+  if (scan.summary?.publicRepos != null || scan.summary?.privateRepos != null) {
+    parts.push(`${scan.summary.publicRepos ?? 0} public · ${scan.summary.privateRepos ?? 0} private`);
+  }
   if (scan.rateLimitRemaining != null) parts.push(`Rate remaining: ${scan.rateLimitRemaining}`);
   return parts.join(' · ');
 }
@@ -122,12 +127,16 @@ function renderDashboard(scan) {
 
   $('#welcome-empty').classList.add('hidden');
   $('#org-summary').classList.remove('hidden');
+  $('#teams-report-section').classList.remove('hidden');
   $('#kpi-section').classList.remove('hidden');
   $('#charts-section').classList.remove('hidden');
   $('#table-section').classList.remove('hidden');
 
   const s = scan.summary;
+  $('#kpi-total').textContent = s.totalDiscovered ?? '—';
+  $('#kpi-active').textContent = s.totalActive ?? s.visibleRepos ?? '—';
   $('#kpi-repos').textContent = s.visibleRepos;
+  $('#kpi-archived').textContent = s.archivedSkipped ?? '—';
   $('#kpi-critical').textContent = s.critical;
   $('#kpi-warning').textContent = s.warning;
   $('#kpi-healthy').textContent = s.healthy;
@@ -147,10 +156,43 @@ function renderDashboard(scan) {
     `).join('');
   }
 
+  renderTeamsReport(scan.teamsReport);
+
   renderHealthBars(s);
+
+  if (s.accessNote) {
+    showToast(s.accessNote, 'info');
+  }
   renderOwners(scan.owners || []);
   populateOwnerFilter(scan.owners || []);
   renderRepoTable(scan.repositories || []);
+}
+
+function renderTeamsReport(text) {
+  const section = $('#teams-report-section');
+  const field = $('#teams-report-text');
+  if (!text) {
+    section?.classList.add('hidden');
+    if (field) field.value = '';
+    return;
+  }
+  section.classList.remove('hidden');
+  field.value = text;
+}
+
+async function copyTeamsReport() {
+  const text = $('#teams-report-text')?.value;
+  if (!text) {
+    showToast('Run a scan first to generate the evaluation report', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Evaluation report copied — paste into Teams', 'success');
+  } catch {
+    $('#teams-report-text')?.select();
+    showToast('Select the text and copy manually (Ctrl+C)', 'info');
+  }
 }
 
 function populateOwnerFilter(owners) {
@@ -313,8 +355,8 @@ async function startScan() {
   const mode = $('#mode').value;
 
   $('#btn-refresh').disabled = true;
-  setStatus('running', 'Scanning all non-archived DigitalQatalyst repos…', '');
-  showLoading(true, 'Fetching repos matching org:DigitalQatalyst archived:false…');
+  setStatus('running', 'Scanning all active org repos (public + private)…', '');
+  showLoading(true, 'Listing org repositories via GitHub API…');
 
   try {
     const scan = await api('/scan', {
@@ -349,6 +391,7 @@ async function init() {
   $('#btn-refresh').addEventListener('click', startScan);
   $('#btn-json').addEventListener('click', () => exportFile('json'));
   $('#btn-csv').addEventListener('click', () => exportFile('csv'));
+  $('#btn-copy-teams').addEventListener('click', copyTeamsReport);
   $('#repo-search').addEventListener('input', () => {
     if (currentScan) renderRepoTable(currentScan.repositories);
   });

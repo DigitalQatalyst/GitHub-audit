@@ -7,6 +7,8 @@ const {
   commitHygieneRating,
 } = require('../src/audit/rules');
 const { enrichRisk, buildOrganisationSummary } = require('../src/audit/descriptions');
+const { partitionOrgRepos, matchesRepoScope } = require('../src/audit/scanner');
+const { buildTeamsReport, postureLabel } = require('../src/audit/teamsReport');
 
 describe('branch naming rules', () => {
   it('accepts approved lifecycle branches', () => {
@@ -64,6 +66,95 @@ describe('health scoring', () => {
       mergedPrsLast30d: 0,
     });
     assert.equal(status, 'critical');
+  });
+});
+
+describe('repository discovery', () => {
+  const sampleRepos = [
+    { full_name: 'DigitalQatalyst/public-repo', owner: { login: 'DigitalQatalyst' }, archived: false, private: false },
+    { full_name: 'DigitalQatalyst/private-repo', owner: { login: 'DigitalQatalyst' }, archived: false, private: true },
+    { full_name: 'DigitalQatalyst/old-repo', owner: { login: 'DigitalQatalyst' }, archived: true, private: true },
+    { full_name: 'OtherOrg/repo', owner: { login: 'OtherOrg' }, archived: false, private: false },
+  ];
+
+  it('includes public and private active org repos when scope is all', () => {
+    const { active, archivedSkipped } = partitionOrgRepos(sampleRepos, 'DigitalQatalyst', 'all');
+    assert.equal(active.length, 2);
+    assert.equal(archivedSkipped, 1);
+    assert.equal(active.some((r) => r.private), true);
+  });
+
+  it('filters to private repos only', () => {
+    const { active } = partitionOrgRepos(sampleRepos, 'DigitalQatalyst', 'private');
+    assert.equal(active.length, 1);
+    assert.equal(active[0].full_name, 'DigitalQatalyst/private-repo');
+  });
+
+  it('matches repo visibility scope', () => {
+    assert.equal(matchesRepoScope({ private: true }, 'private'), true);
+    assert.equal(matchesRepoScope({ private: false }, 'private'), false);
+    assert.equal(matchesRepoScope({ private: false }, 'public'), true);
+  });
+});
+
+describe('teams report', () => {
+  const sampleScan = {
+    completedAt: '2026-06-18T12:00:00.000Z',
+    accountFilter: 'DigitalQatalyst',
+    summary: {
+      visibleRepos: 4,
+      totalDiscovered: 129,
+      totalActive: 31,
+      archivedSkipped: 98,
+      publicRepos: 2,
+      privateRepos: 2,
+      critical: 2,
+      warning: 1,
+      healthy: 1,
+      staleRepos: 1,
+      openPrRisks: 3,
+      namingViolations: 5,
+      archivedSkipped: 2,
+    },
+    repositories: [
+      {
+        name: 'repo-a',
+        health: 'critical',
+        healthLabel: 'Critical',
+        riskScore: 12,
+        topIssue: 'Default protection missing',
+        prWorkflow: { open: 2, stalled: 1 },
+        risks: [
+          { id: 'default-protection-missing', label: 'Default protection missing' },
+          { id: 'stalled-prs', label: 'Stalled PRs (1)', count: 1 },
+        ],
+      },
+      {
+        name: 'repo-b',
+        health: 'warning',
+        healthLabel: 'Warning',
+        riskScore: 6,
+        prWorkflow: { open: 0, stalled: 0 },
+        risks: [{ id: 'naming-violations', label: 'Naming violations (3)', count: 3 }],
+      },
+    ],
+  };
+
+  it('builds plain-text report for Teams', () => {
+    const text = buildTeamsReport(sampleScan);
+    assert.ok(text.includes('GitHub Governance Report'));
+    assert.ok(text.includes('129 total repos'));
+    assert.ok(text.includes('31 active'));
+    assert.ok(text.includes('4 scanned'));
+    assert.ok(text.includes('ANALYSIS'));
+    assert.ok(text.includes('RECOMMENDED ACTIONS'));
+    assert.ok(text.includes('repo-a'));
+    assert.ok(!text.includes('|')); // no markdown tables
+  });
+
+  it('labels posture from summary', () => {
+    assert.equal(postureLabel({ visibleRepos: 10, critical: 7, warning: 2 }), 'CRITICAL');
+    assert.equal(postureLabel({ visibleRepos: 10, critical: 0, warning: 0, healthy: 10 }), 'ON TRACK');
   });
 });
 

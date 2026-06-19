@@ -54,8 +54,15 @@ async function runAudit(options) {
   const repos = await fetchAllRepositories(octokit, accountFilter, scope, progress);
   const archivedSkipped = repos.archivedSkipped || 0;
   const totalDiscovered = repos.totalDiscovered || 0;
+  const totalActive = repos.totalActive ?? repos.list.length;
+  const publicRepos = repos.publicCount ?? 0;
+  const privateRepos = repos.privateCount ?? 0;
   const repoList = repos.list;
-  progress('Found repositories', `${repoList.length} active repos to scan (archived excluded)`);
+  progress(
+    'Found repositories',
+    `${totalDiscovered} total · ${totalActive} active · scanning ${repoList.length}`
+    + ` (${archivedSkipped} archived excluded)`,
+  );
   const repositories = [];
   let namingViolations = 0;
   let openPrRisks = 0;
@@ -103,6 +110,7 @@ async function runAudit(options) {
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     accountFilter: accountFilter || 'all accessible',
+    accountType: repos.accountType || 'unknown',
     scope,
     mode,
     viewer: viewer.login,
@@ -110,7 +118,12 @@ async function runAudit(options) {
     summary: {
       visibleRepos: repositories.length,
       totalDiscovered,
+      totalActive,
+      publicRepos,
+      privateRepos,
       archivedSkipped,
+      accessLimited: repos.accessLimited || false,
+      accessNote: repos.accessNote || null,
       critical,
       warning,
       healthy,
@@ -118,7 +131,6 @@ async function runAudit(options) {
       openPrRisks,
       namingViolations,
       protectionUnknown,
-      archivedSkipped,
     },
     owners: Object.entries(ownerCounts).map(([name, count]) => ({ name, count })),
     repositories,
@@ -295,62 +307,223 @@ function hasAssignedReviewers(pr) {
   return reviewers + teams + assignees > 0;
 }
 
+function orgListType(scope) {
+  if (scope === 'public') return 'public';
+  if (scope === 'private') return 'private';
+  return 'all';
+}
+
+function isOrgRepo(repo, orgName) {
+  return repo.owner?.login?.toLowerCase() === orgName.toLowerCase();
+}
+
+function matchesRepoScope(repo, scope) {
+  if (scope === 'private') return repo.private === true;
+  if (scope === 'public') return repo.private !== true;
+  return true;
+}
+
 /**
- * Fetch repositories using GitHub search (matches org UI filter archived:false).
+ * Split org listing into active (non-archived, scope-matched) and archived counts.
+ */
+function partitionOrgRepos(orgRepos, orgName, scope) {
+  let archivedSkipped = 0;
+  const active = [];
+
+  for (const repo of orgRepos) {
+    if (!isOrgRepo(repo, orgName)) continue;
+    if (repo.archived) {
+      archivedSkipped += 1;
+      continue;
+    }
+    if (matchesRepoScope(repo, scope)) active.push(repo);
+  }
+
+  return { active, archivedSkipped };
+}
+
+async function resolveAccountType(octokit, account) {
+  try {
+    await octokit.orgs.get({ org: account });
+    return 'org';
+  } catch {
+    return 'user';
+  }
+}
+
+async function fetchSearchTotalCount(octokit, q) {
+  const { data } = await octokit.search.repos({ q, per_page: 1 });
+  return { total: data.total_count, incomplete: data.incomplete_results };
+}
+
+async function fetchOwnerInventory(octokit, account, progress) {
+  progress('Fetching repositories', `Owner inventory: ${account}`);
+  const owned = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+    per_page: 100,
+    affiliation: 'owner',
+    sort: 'updated',
+  });
+  return owned.filter((repo) => isOrgRepo(repo, account));
+}
+
+async function fetchOrgReposViaList(octokit, orgName, scope, progress) {
+  progress('Fetching repositories', `Org API: ${orgName} (${orgListType(scope)})`);
+  return octokit.paginate(octokit.repos.listForOrg, {
+    org: orgName,
+    per_page: 100,
+    type: orgListType(scope),
+  });
+}
+
+async function fetchOrgReposViaMembership(octokit, orgName, scope, progress) {
+  progress('Fetching repositories', `Member listing for ${orgName}`);
+  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+    per_page: 100,
+    affiliation: 'owner,collaborator,organization_member',
+    sort: 'updated',
+  });
+  return allAccessible.filter((repo) => isOrgRepo(repo, orgName) && matchesRepoScope(repo, scope));
+}
+
+async function fetchSearchCounts(octokit, account, accountType, progress) {
+  const prefix = accountType === 'org' ? 'org' : 'user';
+  try {
+    const [total, active, archived] = await Promise.all([
+      fetchSearchTotalCount(octokit, `${prefix}:${account}`),
+      fetchSearchTotalCount(octokit, `${prefix}:${account} archived:false`),
+      fetchSearchTotalCount(octokit, `${prefix}:${account} archived:true`),
+    ]);
+    progress(
+      'GitHub inventory',
+      `${total.total} total · ${active.total} active · ${archived.total} archived (${prefix}: search)`,
+    );
+    return {
+      total: total.total,
+      active: active.total,
+      archived: archived.total,
+      incomplete: total.incomplete || active.incomplete || archived.incomplete,
+    };
+  } catch (err) {
+    progress('Search counts skipped', err.message);
+    return null;
+  }
+}
+
+async function supplementWithSearch(octokit, account, scope, repoMap, progress, accountType) {
+  const prefix = accountType === 'org' ? 'org' : 'user';
+  let q = `${prefix}:${account} archived:false`;
+  if (scope === 'private') q += ' is:private';
+  else if (scope === 'public') q += ' is:public';
+
+  let page = 1;
+  let added = 0;
+
+  while (true) {
+    const { data } = await octokit.search.repos({ q, per_page: 100, page });
+    for (const repo of data.items) {
+      if (!isOrgRepo(repo, account)) continue;
+      if (!repoMap.has(repo.full_name)) {
+        repoMap.set(repo.full_name, repo);
+        added += 1;
+      }
+    }
+    if (data.incomplete_results) {
+      progress('Search supplement', 'Partial search results — listing is authoritative for scan');
+    }
+    if (data.items.length < 100) break;
+    page += 1;
+  }
+
+  if (added > 0) progress('Search supplement', `Added ${added} active repos from search index`);
+}
+
+function summarizeRepoList(list) {
+  const privateCount = list.filter((repo) => repo.private).length;
+  return {
+    list,
+    publicCount: list.length - privateCount,
+    privateCount,
+  };
+}
+
+/**
+ * Fetch repo inventory: total counts from GitHub, scan list = active non-archived only.
  */
 async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
   const repoMap = new Map();
   const filter = (accountFilter || process.env.AUDIT_ACCOUNT_FILTER || '').trim();
 
   if (filter) {
-    let q = `org:${filter} archived:false`;
-    if (scope === 'private') q += ' is:private';
-    else if (scope === 'public') q += ' is:public';
+    const accountType = await resolveAccountType(octokit, filter);
+    progress('Account type', `${filter} is a GitHub ${accountType}`);
 
-    progress('Fetching repositories', `Search: ${q}`);
-
-    try {
-      let page = 1;
-      let totalCount = 0;
-      while (true) {
-        const { data } = await octokit.search.repos({ q, per_page: 100, page });
-        totalCount = data.total_count;
-        for (const r of data.items) {
-          if (r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
-            repoMap.set(r.full_name, r);
-          }
-        }
-        if (repoMap.size >= totalCount || data.items.length < 100) break;
-        page += 1;
+    let inventory = [];
+    if (accountType === 'org') {
+      try {
+        inventory = await fetchOrgReposViaList(octokit, filter, 'all', progress);
+      } catch (err) {
+        progress('Org list failed', `${err.message} — falling back to owner listing`);
+        inventory = await fetchOwnerInventory(octokit, filter, progress);
       }
-      progress('Org inventory', `${repoMap.size} non-archived repos (GitHub reports ${totalCount})`);
-    } catch (err) {
-      progress('Search failed', `Falling back to org list: ${err.message}`);
-      const orgRepos = await octokit.paginate(octokit.repos.listForOrg, {
-        org: filter,
-        per_page: 100,
-        type: scope === 'public' ? 'public' : 'all',
-      });
-      for (const r of orgRepos) {
-        if (!r.archived && r.owner?.login?.toLowerCase() === filter.toLowerCase()) {
-          repoMap.set(r.full_name, r);
-        }
-      }
+    } else {
+      inventory = await fetchOwnerInventory(octokit, filter, progress);
     }
 
-    let archivedSkipped = 0;
+    const searchCounts = await fetchSearchCounts(octokit, filter, accountType, progress);
+
+    const accountRepos = inventory.filter((repo) => isOrgRepo(repo, filter));
+    const listedArchived = accountRepos.filter((repo) => repo.archived).length;
+    const listedTotal = accountRepos.length;
+    const listedActive = listedTotal - listedArchived;
+
+    const partitioned = partitionOrgRepos(inventory, filter, scope);
+    for (const repo of partitioned.active) {
+      repoMap.set(repo.full_name, repo);
+    }
+
+    progress(
+      'Listed inventory',
+      `${listedTotal} total listed · ${listedActive} active · ${listedArchived} archived`,
+    );
+
     try {
-      const { data } = await octokit.search.repos({
-        q: `org:${filter} archived:true`,
-        per_page: 1,
-      });
-      archivedSkipped = data.total_count;
-    } catch { /* optional metadata */ }
+      await supplementWithSearch(octokit, filter, scope, repoMap, progress, accountType);
+    } catch (err) {
+      progress('Search supplement skipped', err.message);
+    }
 
-    const list = [...repoMap.values()];
-    progress('Ready to scan', `${list.length} active ${filter} repos`);
+    const { list, publicCount, privateCount } = summarizeRepoList([...repoMap.values()]);
 
-    return { list, archivedSkipped, totalDiscovered: list.length + archivedSkipped };
+    const totalDiscovered = Math.max(searchCounts?.total ?? 0, listedTotal);
+    const totalActive = Math.max(searchCounts?.active ?? 0, listedActive, list.length);
+    const archivedSkipped = Math.max(
+      searchCounts?.archived ?? 0,
+      listedArchived,
+      totalDiscovered > totalActive ? totalDiscovered - totalActive : 0,
+    );
+
+    const accessLimited = list.length < totalActive;
+    const accessNote = accessLimited
+      ? `Scanning ${list.length} of ${totalActive} active repos — token cannot access the rest (check PAT scopes and repository access).`
+      : null;
+
+    progress(
+      'Ready to scan',
+      `${totalDiscovered} total · ${totalActive} active · auditing ${list.length}`
+      + ` (${archivedSkipped} archived excluded)`,
+    );
+
+    return {
+      list,
+      accountType,
+      totalDiscovered,
+      totalActive,
+      archivedSkipped,
+      publicCount,
+      privateCount,
+      accessLimited,
+      accessNote,
+    };
   }
 
   progress('Fetching repositories', 'All accessible via PAT');
@@ -359,12 +532,29 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
     affiliation: 'owner,collaborator,organization_member',
     sort: 'updated',
   });
-  for (const r of allAccessible) {
-    if (!r.archived) repoMap.set(r.full_name, r);
+
+  let archivedSkipped = 0;
+  for (const repo of allAccessible) {
+    if (repo.archived) {
+      archivedSkipped += 1;
+      continue;
+    }
+    if (matchesRepoScope(repo, scope)) repoMap.set(repo.full_name, repo);
   }
 
-  const list = [...repoMap.values()];
-  return { list, archivedSkipped: 0, totalDiscovered: list.length };
+  const { list, publicCount, privateCount } = summarizeRepoList([...repoMap.values()]);
+  const totalDiscovered = list.length + archivedSkipped;
+  return {
+    list,
+    accountType: 'mixed',
+    totalDiscovered,
+    totalActive: list.length,
+    archivedSkipped,
+    publicCount,
+    privateCount,
+    accessLimited: false,
+    accessNote: null,
+  };
 }
 
 function buildRisks(metrics, nonCompliantCount, hasContributing, commits24h, health) {
@@ -496,4 +686,10 @@ function buildActions(risks, protection, hasContributing) {
   return actions;
 }
 
-module.exports = { runAudit, daysSince };
+module.exports = {
+  runAudit,
+  daysSince,
+  isOrgRepo,
+  matchesRepoScope,
+  partitionOrgRepos,
+};

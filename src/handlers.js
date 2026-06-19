@@ -5,6 +5,7 @@ const { getServerPat, getDataDir } = require('./config');
 let _scanner;
 let _storage;
 let _descriptions;
+let _teamsReport;
 
 function lazyScanner() {
   if (!_scanner) _scanner = require('./audit/scanner');
@@ -19,6 +20,21 @@ function lazyStorage() {
 function lazyDescriptions() {
   if (!_descriptions) _descriptions = require('./audit/descriptions');
   return _descriptions;
+}
+
+function lazyTeamsReport() {
+  if (!_teamsReport) _teamsReport = require('./audit/teamsReport');
+  return _teamsReport;
+}
+
+function attachReports(scan) {
+  const { buildOrganisationSummary } = lazyDescriptions();
+  const { buildTeamsReport } = lazyTeamsReport();
+  return {
+    ...scan,
+    orgReport: buildOrganisationSummary(scan),
+    teamsReport: buildTeamsReport(scan),
+  };
 }
 
 function dataDir() {
@@ -50,12 +66,11 @@ function getStatus() {
 
 function getLatestScan() {
   const { loadLatestScan } = lazyStorage();
-  const { buildOrganisationSummary } = lazyDescriptions();
   const latest = loadLatestScan(dataDir());
   if (!latest) {
-    return { status: 'empty', repositories: [], summary: null, orgReport: null };
+    return { status: 'empty', repositories: [], summary: null, orgReport: null, teamsReport: null };
   }
-  return { ...latest, orgReport: buildOrganisationSummary(latest) };
+  return attachReports(latest);
 }
 
 function listScanHistory() {
@@ -95,6 +110,14 @@ function getExportCsv() {
   return { csv };
 }
 
+function getTeamsReport() {
+  const { loadLatestScan } = lazyStorage();
+  const { buildTeamsReport } = lazyTeamsReport();
+  const latest = loadLatestScan(dataDir());
+  if (!latest) return { error: 'No scan results yet. Run a scan first.', status: 404 };
+  return { text: buildTeamsReport(latest) };
+}
+
 async function runScan(body = {}) {
   const {
     pat: bodyPat,
@@ -113,17 +136,15 @@ async function runScan(body = {}) {
 
   const { runAudit } = lazyScanner();
   const { saveScan } = lazyStorage();
-  const { buildOrganisationSummary } = lazyDescriptions();
 
   const scan = await runAudit({ pat, accountFilter, scope, mode, onProgress: () => {} });
-  scan.orgReport = buildOrganisationSummary(scan);
+  const withReports = attachReports(scan);
   saveScan(dataDir(), scan);
 
   return {
     status: 'complete',
     message: `Scan complete — ${scan.summary.visibleRepos} active repositories`,
-    ...scan,
-    orgReport: scan.orgReport,
+    ...withReports,
   };
 }
 
@@ -146,5 +167,6 @@ function getActionGuidance(actionId, repo) {
 
 module.exports = {
   getConfig, getStatus, getLatestScan, listScanHistory,
-  getExportJson, getExportCsv, runScan, runDailyCron, getActionGuidance,
+  getExportJson, getExportCsv, getTeamsReport,
+  runScan, runDailyCron, getActionGuidance,
 };

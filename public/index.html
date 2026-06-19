@@ -50,7 +50,7 @@
 
       <div class="status-bar" id="status-bar">
         <span class="badge badge-idle" id="status-badge">Ready</span>
-        <span id="status-text">Click Refresh to scan all active DigitalQatalyst repositories (archived excluded)</span>
+        <span id="status-text">Click Refresh to scan all active org repositories — public and private (archived excluded)</span>
         <span class="status-meta" id="status-meta"></span>
       </div>
       <p class="pat-note" id="pat-note"></p>
@@ -59,7 +59,7 @@
     <section class="welcome-empty" id="welcome-empty">
       <div class="welcome-card">
         <h2>Start your daily audit</h2>
-        <p>Click <strong>Refresh</strong> to scan all active <strong>DigitalQatalyst</strong> repositories. Archived repos and other owners (e.g. JimmyCodeMunity) are excluded.</p>
+        <p>Click <strong>Refresh</strong> to scan all active <strong>DigitalQatalyst</strong> repositories (public and private). Archived repos and other owners are excluded.</p>
         <ul>
           <li>Repository activity and commit quality</li>
           <li>Branch naming compliance</li>
@@ -76,7 +76,10 @@
     </section>
 
     <section class="kpi-row hidden" id="kpi-section">
-      <div class="kpi-card"><span class="kpi-value" id="kpi-repos">—</span><span class="kpi-label">Visible Repos</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-total">—</span><span class="kpi-label">Total Repos</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-active">—</span><span class="kpi-label">Active Repos</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-repos">—</span><span class="kpi-label">Scanned</span></div>
+      <div class="kpi-card"><span class="kpi-value" id="kpi-archived">—</span><span class="kpi-label">Archived</span></div>
       <div class="kpi-card critical"><span class="kpi-value" id="kpi-critical">—</span><span class="kpi-label">Critical</span></div>
       <div class="kpi-card warning"><span class="kpi-value" id="kpi-warning">—</span><span class="kpi-label">Warning</span></div>
       <div class="kpi-card healthy"><span class="kpi-value" id="kpi-healthy">—</span><span class="kpi-label">Healthy</span></div>
@@ -131,6 +134,15 @@
       </div>
     </section>
 
+    <section class="teams-report hidden" id="teams-report-section">
+      <div class="teams-report-header">
+        <h2>Evaluation Report</h2>
+        <button type="button" id="btn-copy-teams" class="btn btn-primary">Copy Report</button>
+      </div>
+      <p class="teams-report-hint">Copy and paste into Teams or email for follow-up and visibility.</p>
+      <textarea id="teams-report-text" class="teams-report-text" readonly rows="18"></textarea>
+    </section>
+
     <div class="modal hidden" id="detail-modal">
       <div class="modal-content">
         <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
@@ -151,6 +163,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=7"></script>
+  <script src="/app.js?v=11"></script>
 </body>
 </html>

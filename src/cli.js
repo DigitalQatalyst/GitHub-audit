@@ -7,6 +7,7 @@ require('dotenv').config();
 const { runAudit } = require('./audit/scanner');
 const { saveScan } = require('./audit/storage');
 const { buildOrganisationSummary } = require('./audit/descriptions');
+const { buildTeamsReport } = require('./audit/teamsReport');
 const { getServerPat } = require('./config');
 
 async function main() {
@@ -38,6 +39,7 @@ async function main() {
   });
 
   const orgSummary = buildOrganisationSummary(scan);
+  const teamsReport = buildTeamsReport(scan);
   scan.orgReport = orgSummary;
 
   const saved = saveScan(dataDir, scan);
@@ -45,6 +47,8 @@ async function main() {
   console.log(`Critical: ${scan.summary.critical} | Warning: ${scan.summary.warning} | Healthy: ${scan.summary.healthy}`);
   console.log(`Results saved to ${saved}`);
   console.log(`\n${orgSummary.overallAssessment}`);
+  console.log('\n--- Teams update (copy below) ---\n');
+  console.log(teamsReport);
 }
 
 main().catch((err) => {
