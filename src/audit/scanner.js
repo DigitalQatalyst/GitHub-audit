@@ -63,25 +63,26 @@ async function runAudit(options) {
     `${totalDiscovered} total · ${totalActive} active · scanning ${repoList.length}`
     + ` (${archivedSkipped} archived excluded)`,
   );
-  const repositories = [];
   let namingViolations = 0;
   let openPrRisks = 0;
   let protectionUnknown = 0;
 
-  for (let i = 0; i < repoList.length; i++) {
-    const repo = repoList[i];
+  const repositories = await mapWithConcurrency(repoList, 4, async (repo, index) => {
     const [owner, name] = [repo.owner.login, repo.name];
-    progress('Scanning', `${owner}/${name} (${i + 1}/${repoList.length})`);
+    progress('Scanning', `${owner}/${name} (${index + 1}/${repoList.length})`);
 
-    const rateCheck = await octokit.rateLimit.get();
-    if (rateCheck.data.resources.core.remaining < 50) {
-      progress('Rate limit pause', 'Waiting for API quota');
-      await sleep(60000);
+    if (index > 0 && index % 8 === 0) {
+      const rateCheck = await octokit.rateLimit.get();
+      if (rateCheck.data.resources.core.remaining < 80) {
+        progress('Rate limit pause', 'Waiting for API quota');
+        await sleep(45000);
+      }
     }
 
-    const repoAudit = await auditRepository(octokit, owner, name, repo, mode);
-    repositories.push(repoAudit);
+    return auditRepository(octokit, owner, name, repo, mode);
+  });
 
+  for (const repoAudit of repositories) {
     namingViolations += repoAudit.branches?.nonCompliant || 0;
     openPrRisks += repoAudit.prWorkflow?.atRisk || 0;
     if (repoAudit.protection?.unknown) protectionUnknown += repoAudit.protection.unknown;
@@ -148,12 +149,19 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
   let hasContributing = false;
 
   try {
-    branches = await octokit.paginate(octokit.repos.listBranches, {
-      owner, repo: name, per_page: 100,
-    });
+    if (mode === 'thorough') {
+      branches = await octokit.paginate(octokit.repos.listBranches, {
+        owner, repo: name, per_page: 100,
+      });
+    } else {
+      const { data: branchPage } = await octokit.repos.listBranches({
+        owner, repo: name, per_page: 100,
+      });
+      branches = branchPage;
+    }
   } catch { /* empty or no access */ }
 
-  const commitLimit = mode === 'thorough' ? 100 : 50;
+  const commitLimit = mode === 'thorough' ? 100 : 30;
   try {
     const { data: commitList } = await octokit.repos.listCommits({
       owner, repo: name, per_page: commitLimit,
@@ -292,7 +300,7 @@ async function auditRepository(octokit, owner, name, repoMeta, mode) {
     docs: {
       readme: hasReadme,
       contributing: hasContributing,
-      display: `README ${hasReadme ? 'Yes' : 'No'}, CONTRIB ${hasContributing ? 'Yes' : 'No'}`,
+      display: `README ${hasReadme ? 'Yes' : 'No'}`,
     },
     risks,
     riskCount: risks.length,
@@ -375,16 +383,6 @@ async function fetchOrgReposViaList(octokit, orgName, scope, progress) {
   });
 }
 
-async function fetchOrgReposViaMembership(octokit, orgName, scope, progress) {
-  progress('Fetching repositories', `Member listing for ${orgName}`);
-  const allAccessible = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-    per_page: 100,
-    affiliation: 'owner,collaborator,organization_member',
-    sort: 'updated',
-  });
-  return allAccessible.filter((repo) => isOrgRepo(repo, orgName) && matchesRepoScope(repo, scope));
-}
-
 async function fetchSearchCounts(octokit, account, accountType, progress) {
   const prefix = accountType === 'org' ? 'org' : 'user';
   try {
@@ -446,6 +444,15 @@ function summarizeRepoList(list) {
   };
 }
 
+function formatOrgAccessError(filter, err) {
+  const detail = err?.message || 'unknown error';
+  return new Error(
+    `Cannot list ${filter} repositories. Your PAT needs repo and read:org scopes, ` +
+    `access to the organisation (fine-grained tokens: grant org + repository access), ` +
+    `and SSO authorization if the org uses it. Original error: ${detail}`,
+  );
+}
+
 /**
  * Fetch repo inventory: total counts from GitHub, scan list = active non-archived only.
  */
@@ -501,6 +508,10 @@ async function fetchAllRepositories(octokit, accountFilter, scope, progress) {
       listedArchived,
       totalDiscovered > totalActive ? totalDiscovered - totalActive : 0,
     );
+
+    if (list.length === 0) {
+      throw formatOrgAccessError(filter, new Error('No active repositories returned'));
+    }
 
     const accessLimited = list.length < totalActive;
     const accessNote = accessLimited
@@ -642,10 +653,10 @@ async function checkProtection(octokit, owner, name, branches) {
   const branchNames = new Set(branches.map((b) => b.name));
   const result = { branches: {}, unknown: 0 };
 
-  for (const branch of PROTECTION_BRANCHES) {
+  await Promise.all(PROTECTION_BRANCHES.map(async (branch) => {
     if (!branchNames.has(branch)) {
       result.branches[branch] = 'missing-branch';
-      continue;
+      return;
     }
     try {
       await octokit.repos.getBranchProtection({ owner, repo: name, branch });
@@ -658,9 +669,29 @@ async function checkProtection(octokit, owner, name, branches) {
         result.unknown += 1;
       }
     }
-  }
+  }));
 
   return result;
+}
+
+async function mapWithConcurrency(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fn(items[index], index);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 function buildActions(risks, protection, hasContributing) {
